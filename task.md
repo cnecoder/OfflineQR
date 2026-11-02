@@ -72,6 +72,7 @@
 | 28 | `feat: brand icon A-finder` | 图标定稿候选 A「定位角」(黑白灰银):1024 源图逐像素绘制(深灰渐变底 + 银渐变描边定位角 + 白芯 + 右下数据点阵,四角透明),`tauri icon` 派生全平台尺寸(ico/icns/png/Store);favicon 同步;B(扫描线)/E(矩阵渐隐)设计稿存档 docs/design/icons/ | ✔ 已完成 |
 | 28 | `ci: dual-tag release` | 双 tag 发布:v*(全功能线 OfflineQR)/ scanner-v*(识别线 OfflineQRScanner);版本守卫按前缀剥离比对;releaseName 按前缀;绿色版上传改 glob 解耦产品名;发版前加单测兜底;远程旧 release(v1.2.0/v1.1.1/v1.1.0)与 tag 已删除 | ✔ 已完成(闭环验证:scanner-v1.2.0 发布) |
 | 29 | `fix: physical-pixel overlay geometry` | 第三方反馈 2K 屏选区遮罩放大 1.5 倍遮挡邻屏:混合 DPI 下遮罩窗逻辑坐标经"窗口创建时所在显示器"的缩放换算(主屏 2K@150% 时副屏遮罩放大 1.5 倍);遮罩窗几何全面改物理像素——隐藏创建 → set_position/set_size(Physical) 落位 → show,每屏 scale_factor 与实测 inner_size 入日志;100% 单一缩放环境行为不变 | ✔ 已完成(待混合 DPI 真机复测) |
+| 30 | `perf: parallel capture and fast png` | 弹出耗时优化(1080p×2 日志实测 ~1.7s):① PNG 编码换 Fast 压缩+无滤镜(默认压缩 ~1.1s 是大头);② 截屏线程与遮罩窗创建(隐藏)并行、遮罩前端轮询取图(3s 上限),就绪即物理落位显示;启动失败回滚:关闭隐藏遮罩 + 恢复主窗 | ✔ 已完成(待实测计时) |
 
 每步完成后:勾选下方对应任务 + 更新本表状态 + commit。
 
@@ -185,3 +186,4 @@
 - 2026-11-01 **产品改名**(人工反馈):工具名 **OfflineQR**,界面标题 **极简二维码**——productName/identifier/窗口标题/界面/E2E 选择器/绿色版脚本/Release 工作流/README 同步;Cargo 与 npm 包名保持 qr-tool(debug exe 路径稳定)。待办:README 内容整体刷新(仍停留在 v1.0 识别版描述)。
 - 2026-11-01 **对内改名**(人工反馈"对内对外名字全改"):Cargo 包 offlineqr、二进制 **OfflineQR.exe**(debug/release 产物名统一)、lib offlineqr_lib、npm 包 offlineqr、日志文件 offlineqr-YYYYMMDD.log(当日旧 qr-tool-*.log 保留)、绿色版与 CI zip 名 OfflineQR_*;debug exe 路径变为 target/debug/OfflineQR.exe。
 - 2026-11-02 **fix:遮罩窗混合 DPI 几何错位**(第三方反馈 2K 屏选区放大 1.5 倍遮挡邻屏):逻辑坐标经"窗口创建时所在显示器"的缩放换算是歧义源头;遮罩窗几何全面改物理像素(隐藏创建 → Physical 落位 → show),scale_factor/实测视口入日志;100% 环境行为不变。
+- 2026-11-03 **perf:弹出耗时优化**:Fast PNG 编码 + 截屏线程/遮罩窗创建并行 + 遮罩前端轮询取图(3s 上限);预期"点击 → 遮罩可见"从 ~1.7s 压到 ~0.8s(debug 环境)。

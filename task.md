@@ -74,6 +74,7 @@
 | 29 | `fix: physical-pixel overlay geometry` | 第三方反馈 2K 屏选区遮罩放大 1.5 倍遮挡邻屏:混合 DPI 下遮罩窗逻辑坐标经"窗口创建时所在显示器"的缩放换算(主屏 2K@150% 时副屏遮罩放大 1.5 倍);遮罩窗几何全面改物理像素——隐藏创建 → set_position/set_size(Physical) 落位 → show,每屏 scale_factor 与实测 inner_size 入日志;100% 单一缩放环境行为不变 | ✔ 已完成(待混合 DPI 真机复测) |
 | 30 | `perf: parallel capture and fast png` | 弹出耗时优化(1080p×2 日志实测 ~1.7s):① PNG 编码换 Fast 压缩+无滤镜(默认压缩 ~1.1s 是大头);② 截屏线程与遮罩窗创建(隐藏)并行、遮罩前端轮询取图(3s 上限),就绪即物理落位显示;启动失败回滚:关闭隐藏遮罩 + 恢复主窗 | ✔ 已完成(待实测计时) |
 | 31 | `feat: right-click cancel in overlay` | 遮罩上右键取消选区与识别(左键拖拽选区不受影响:pointerdown/up 增加 button 校验,防右键误触发拖拽);遮罩底部加操作提示条(左键拖拽 · 右键取消 · Esc 取消) | ✔ 已完成(待实测) |
+| 32 | `chore: release scanner-v1.2.1` | 版本发布规范与流程入文档(双产品线 tag 规范/流程/纪律);中英双版 Release Note(docs/release-notes/scanner-v1.2.1.*.md);版本升至 1.2.1(conf/package/Cargo 三处)并打 tag 触发 CI 发布 | ✔ 已完成 |
 
 每步完成后:勾选下方对应任务 + 更新本表状态 + commit。
 
@@ -81,6 +82,31 @@
 
 > **本分支(`recognition`)为仅识别精简线**(2026-11-01 起):包含全部识别侧改进(卡片体系/主题/全局快捷键/源文件路径/屏幕选区修复),已剥离生成模块与生成历史;完整功能线见 `recognition-generation`。
 > 本分支产品名:**OfflineQRScanner**(区别于全功能线的 OfflineQR),应用数据目录独立(com.offlineqr.scanner)。发版 tag:`scanner-v*`(全功能线为 `v*`)。图标定稿:A「定位角」(黑白灰银),备选 B/E 存档于 docs/design/icons/。
+
+## 版本发布规范与流程(2026-11-03 起)
+
+**双产品线与 tag 规范**
+
+- 全功能线 `recognition-generation` → 产品 **OfflineQR**,tag `vX.Y.Z`
+- 仅识别线 `recognition` → 产品 **OfflineQRScanner**,tag `scanner-vX.Y.Z`
+- tag 全仓库唯一、发布后不可重推;tag 携带的版本必须与该提交 `src-tauri/tauri.conf.json` 的 version 一致(CI 守卫)
+- 两线版本序列各自独立、各自递增;Release 名称由 CI 按 tag 前缀自动生成
+
+**发布流程**
+
+1. 确认分支门禁绿:单测 + 构建(+ E2E)
+2. 更新 `src-tauri/tauri.conf.json` / `package.json` / `src-tauri/Cargo.toml` 的 version(三处一致)
+3. 撰写 `docs/release-notes/<tag>.zh.md` 与 `<tag>.en.md`(新增/修复/优化/升级说明)
+4. commit(`chore: release <tag>`)并推送分支
+5. 打 tag 并推送 → CI 自动构建:Windows(NSIS + 绿色版)/ Linux / macOS;发版前自动执行单测
+6. 构建完成后核对 Release 资产,并以中英双版更新 Release 正文:`gh release edit <tag> --notes-file <合并文件>`
+7. 线上问题回归:复盘"为什么测试没拦住"并记入架构文档 §8
+
+**纪律**
+
+- release 一律由 CI 打包,本地不产出发布产物
+- Linux/macOS 构建失败为已知遗留(不影响 Windows 资产),失败日志构件自助取用
+- 发布基于已实测通过的提交;禁止在未验证的提交上打 tag
 
 - **`v1.0.0` tag**:识别功能完整基线(图片识别 + 屏幕选区 + 历史;56 单测 + 9 E2E)
 - **`recognition` 分支**:只有识别功能,**识别独立迭代线**——识别相关修复与体验优化在此进行并独立发布
@@ -189,3 +215,4 @@
 - 2026-11-02 **fix:遮罩窗混合 DPI 几何错位**(第三方反馈 2K 屏选区放大 1.5 倍遮挡邻屏):逻辑坐标经"窗口创建时所在显示器"的缩放换算是歧义源头;遮罩窗几何全面改物理像素(隐藏创建 → Physical 落位 → show),scale_factor/实测视口入日志;100% 环境行为不变。
 - 2026-11-03 **perf:弹出耗时优化**:Fast PNG 编码 + 截屏线程/遮罩窗创建并行 + 遮罩前端轮询取图(3s 上限);预期"点击 → 遮罩可见"从 ~1.7s 压到 ~0.8s(debug 环境)。
 - 2026-11-03 遮罩右键取消(人工反馈):右键 = 取消选区与识别(左键拖拽不受影响,键位校验防误触发);遮罩底部新增操作提示条。
+- 2026-11-03 版本发布规范与流程入文档(双产品线 tag 规范 / 七步流程 / 三条纪律);发布 scanner-v1.2.1(图标、混合 DPI 修复、弹出耗时优化、右键取消),Release Note 中英双版存档 docs/release-notes/。

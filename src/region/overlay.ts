@@ -68,6 +68,11 @@ async function boot(): Promise<void> {
   const canvas = document.createElement('canvas')
   canvas.className = 'overlay-canvas'
   root.append(image, canvas)
+
+  const hint = document.createElement('div')
+  hint.className = 'overlay-hint'
+  hint.textContent = '左键拖拽选区 · 右键取消 · Esc 取消'
+  root.append(hint)
   document.body.append(root)
 
   const ctx = canvas.getContext('2d')
@@ -143,6 +148,7 @@ async function boot(): Promise<void> {
   const point = (event: PointerEvent) => ({ x: event.clientX, y: event.clientY })
 
   canvas.addEventListener('pointerdown', event => {
+    if (event.button !== 0) return // 仅左键选区;右键留给取消
     canvas.setPointerCapture(event.pointerId)
     selection.begin(point(event))
     log('overlay', `开始选区 @${event.clientX},${event.clientY}`)
@@ -154,11 +160,17 @@ async function boot(): Promise<void> {
     redraw()
   })
   canvas.addEventListener('pointerup', event => {
-    if (!selection.dragging) return
+    if (event.button !== 0 || !selection.dragging) return
     selection.update(point(event))
     const rect = selection.end()
     redraw()
     if (rect) void finish(rect)
+  })
+  // 右键取消选区与识别
+  window.addEventListener('contextmenu', event => {
+    event.preventDefault()
+    log('overlay', '右键取消选区')
+    void invoke('cancel_capture').catch(() => {})
   })
   window.addEventListener('keydown', event => {
     if (event.key === 'Escape') {

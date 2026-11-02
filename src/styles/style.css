@@ -438,6 +438,20 @@ button.primary:hover {
   height: 100%;
   touch-action: none;
 }
+/* 遮罩上的操作提示(纯展示,不挡交互) */
+.overlay-hint {
+  position: fixed;
+  bottom: 26px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 4px 14px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.4);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 12px;
+  pointer-events: none;
+  user-select: none;
+}
 
 /* 双 Tab:分段控件,激活项 accent 淡染 + inset 描边(WinTab 选中态语言) */
 .tabs {

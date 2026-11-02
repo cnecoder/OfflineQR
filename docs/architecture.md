@@ -89,8 +89,10 @@ File / Blob
 ```
 主窗 [屏幕选区] 按钮(仅 __TAURI_INTERNALS__ 存在时显示)
   → invoke start_capture
-      Rust: 隐藏主窗(主线程同步)+ 等待 DWM 重新合成(150ms,防残影)→ 逐屏并行截屏(screenshots crate)
-            → 每屏 PNG/base64 + 物理几何存入 Mutex<Vec<ScreenCapture>>(混合 DPI 下逻辑换算有歧义,一律用物理像素)
+      Rust: 隐藏主窗(主线程同步)+ 等待 DWM 重新合成(150ms,防残影)→ 截屏+快速 PNG 编码(Fast 压缩:
+            默认压缩在 1080p 要数百毫秒,是弹出延迟大头)在后台线程并行执行,遮罩窗创建(隐藏)同时进行
+      Rust: 截屏完成后按物理像素落位(set_position/set_size(Physical) → show)——混合 DPI 下逻辑换算有
+            1.5 倍级错位,一律用物理像素;遮罩窗前端轮询 get_capture(3s 上限)直到数据就绪
       Rust: 每个显示器创建一个遮罩窗口 region-overlay-<i>(无边框置顶,按逻辑坐标定位,
             以 visible=false 隐藏创建——规避 Windows 开窗展开动画)
 遮罩窗(main.ts 按窗口 label 序号进入 overlay 模式)

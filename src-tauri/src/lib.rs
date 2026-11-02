@@ -1,4 +1,5 @@
 use std::io::{Cursor, Write as _};
+use image::ImageEncoder as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -78,9 +79,8 @@ struct ScreenCapture {
     data: CaptureData,
     x: f64,
     y: f64,
-    w: f64,
-    h: f64,
     scale: f32,
+    encode_ms: u32,
 }
 
 #[derive(Default)]
@@ -92,50 +92,32 @@ struct CaptureState(Mutex<Vec<ScreenCapture>>);
 /// 遮罩窗展示底图时主窗就以"半透明残影"出现(Flameshot/Snipaste 同样留此等待)。
 const DWM_RECOMPOSE_WAIT: Duration = Duration::from_millis(150);
 
-fn capture_screen(screen: &screenshots::Screen) -> Result<CaptureData, String> {
+/// 截屏 + 快速 PNG 编码(CompressionType::Fast + 无滤镜:默认压缩在 1080p 上要
+/// 数百毫秒,是"点击到遮罩弹出"延迟的大头;Fast 体积略大但本机 IPC 场景可接受)
+fn capture_screen(screen: &screenshots::Screen) -> Result<ScreenCapture, String> {
+    let t0 = Instant::now();
     let image = screen.capture().map_err(|e| e.to_string())?;
     let (width, height) = (image.width(), image.height());
+    let rgba = image.into_raw(); // 已是 RGBA
     let mut png = Cursor::new(Vec::new());
-    image
-        .write_to(&mut png, image::ImageFormat::Png)
-        .map_err(|e| e.to_string())?;
-    Ok(CaptureData {
-        width,
-        height,
-        png_base64: base64::engine::general_purpose::STANDARD.encode(png.get_ref()),
+    image::codecs::png::PngEncoder::new_with_quality(
+        &mut png,
+        image::codecs::png::CompressionType::Fast,
+        image::codecs::png::FilterType::NoFilter,
+    )
+    .write_image(&rgba, width, height, image::ColorType::Rgba8)
+    .map_err(|e| e.to_string())?;
+    Ok(ScreenCapture {
+        data: CaptureData {
+            width,
+            height,
+            png_base64: base64::engine::general_purpose::STANDARD.encode(png.get_ref()),
+        },
+        x: f64::from(screen.display_info.x),
+        y: f64::from(screen.display_info.y),
+        scale: screen.display_info.scale_factor,
+        encode_ms: t0.elapsed().as_millis() as u32,
     })
-}
-
-/// 逐屏截屏;几何一律使用物理像素(与显示器一一对应,无缩放换算歧义)。
-/// 多屏并行截屏以压缩总耗时。
-fn capture_all_screens() -> Result<Vec<ScreenCapture>, String> {
-    let screens = screenshots::Screen::all().map_err(|e| e.to_string())?;
-    if screens.is_empty() {
-        return Err("未找到可用显示器".into());
-    }
-    let results: Vec<Result<ScreenCapture, String>> = std::thread::scope(|scope| {
-        let handles: Vec<_> = screens
-            .iter()
-            .map(|screen| {
-                scope.spawn(move || {
-                    let data = capture_screen(screen)?;
-                    Ok(ScreenCapture {
-                        data,
-                        x: f64::from(screen.display_info.x),
-                        y: f64::from(screen.display_info.y),
-                        w: f64::from(screen.display_info.width),
-                        h: f64::from(screen.display_info.height),
-                        scale: screen.display_info.scale_factor,
-                    })
-                })
-            })
-            .collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().map_err(|e| format!("截屏线程崩溃:{e:?}")).and_then(|r| r))
-            .collect()
-    });
-    results.into_iter().collect()
 }
 
 /// 主窗显隐:hide/show 必须在主线程上同步执行(跨线程 ShowWindow 不可靠,
@@ -192,99 +174,119 @@ fn toggle_main_window(app: &AppHandle) {
     });
 }
 
-/// 逐屏截屏 → 存状态 → 每个显示器开一个遮罩窗口(均可独立框选)。
+/// 触发屏幕选区:截屏(后台线程并行,含编码)与遮罩窗创建(主线程)同时进行,
+/// 就绪后物理像素落位并显示——压缩"点击到遮罩弹出"的延迟。
 /// 必须为 async:Windows 上在同步命令内创建窗口会死锁(命令阻塞主线程,
 /// 而窗口创建又依赖主线程事件循环),参考 Tauri 官方文档的 async command 指引。
 #[tauri::command]
 async fn start_capture(app: AppHandle) -> Result<(), String> {
     let t0 = Instant::now();
     log_event(&app, "capture", "开始屏幕截取");
-    // 先隐藏主窗(主线程同步执行):它不属于可选内容,且避免紫色 UI 出现在选区画面里
+    // 先隐藏主窗(主线程同步执行):它不属于可选内容,且避免 UI 出现在选区画面里
     set_main_window_visible(&app, false)?;
     log_event(&app, "capture", &format!("主窗隐藏确认,累计 {}ms", t0.elapsed().as_millis()));
     // 等待 DWM 把已隐藏的主窗从桌面合成中移除后再截屏,杜绝残影进入底图
     std::thread::sleep(DWM_RECOMPOSE_WAIT);
     log_event(&app, "capture", &format!("等待 DWM 重新合成 {}ms,开始截屏", DWM_RECOMPOSE_WAIT.as_millis()));
-    let captures = capture_all_screens()?;
-    let count = captures.len();
-    for (i, sc) in captures.iter().enumerate() {
-        log_event(
-            &app,
-            "capture",
-            &format!(
-                "屏幕 {i}: {}x{} px @scale {:.2},物理位置 ({:.0},{:.0})",
-                sc.data.width, sc.data.height, sc.scale, sc.x, sc.y
-            ),
-        );
-    }
-    *app.state::<CaptureState>().0.lock().unwrap() = captures;
     close_all_overlays(&app);
-    for i in 0..count {
-        let screen = {
-            let state = app.state::<CaptureState>();
-            let guard = state.0.lock().unwrap();
-            guard[i].clone()
-        };
-        let label = format!("region-overlay-{i}");
-        // 创建时隐藏:混合 DPI 下逻辑坐标经"窗口创建时所在显示器"的缩放换算会产生
-        // 1.5 倍级错位——先以默认尺寸创建,再用物理像素落位(与显示器一一对应),就位后显示
-        let window = WebviewWindowBuilder::new(
-            &app,
-            label.clone(),
-            WebviewUrl::App("index.html".into()),
-        )
-        .title(format!("屏幕选区 {}", i + 1))
-        .decorations(false)
-        .resizable(false)
-        .always_on_top(true)
-        .skip_taskbar(true)
-        .visible(false)
-        .background_color(tauri::window::Color(0, 0, 0, 255))
-        .build()
-        .map_err(|e| {
-            log_event(&app, "capture", &format!("遮罩窗 {label} 创建失败:{e}"));
-            e.to_string()
-        })?;
-        if let Err(e) = window
-            .set_position(Position::Physical(PhysicalPosition::new(
-                screen.x as i32,
-                screen.y as i32,
-            )))
-            .and_then(|_| {
-                window.set_size(Size::Physical(PhysicalSize::new(
-                    screen.w as u32,
-                    screen.h as u32,
-                )))
-            })
-            .and_then(|_| window.show())
-        {
-            log_event(&app, "capture", &format!("遮罩窗 {label} 几何落位失败:{e}"));
-        }
-        let scale = window.scale_factor().unwrap_or(0.0);
-        let inner = window.inner_size().map(|s| (s.width, s.height)).unwrap_or((0, 0));
-        log_event(
-            &app,
-            "capture",
-            &format!(
-                "遮罩窗 {label} 几何就位并显示:物理 ({:.0},{:.0}) {:.0}x{:.0},scale {scale:.2},inner {}x{},累计 {}ms",
-                screen.x,
-                screen.y,
-                screen.w,
-                screen.h,
-                inner.0,
-                inner.1,
-                t0.elapsed().as_millis()
-            ),
-        );
+    let screens = screenshots::Screen::all().map_err(|e| e.to_string())?;
+    if screens.is_empty() {
+        return Err("未找到可用显示器".into());
     }
-    log_event(
-        &app,
-        "capture",
-        &format!(
-            "全部遮罩几何就位并显示,共 {count} 屏,总耗时 {}ms",
-            t0.elapsed().as_millis()
-        ),
-    );
+    let count = screens.len();
+    let geoms: Vec<(i32, i32, u32, u32)> = screens
+        .iter()
+        .map(|s| {
+            (
+                s.display_info.x,
+                s.display_info.y,
+                s.display_info.width,
+                s.display_info.height,
+            )
+        })
+        .collect();
+    // 截屏+编码在后台线程并行执行;遮罩窗创建(主线程串行)与其同时进行
+    let handles: Vec<_> = screens
+        .into_iter()
+        .enumerate()
+        .map(|(i, screen)| {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let result = capture_screen(&screen);
+                match &result {
+                    Ok(sc) => log_event(&app, "capture", &format!(
+                        "屏幕 {i}: {}x{} px @scale {:.2},物理位置 ({:.0},{:.0}),截屏+编码 {}ms",
+                        sc.data.width, sc.data.height, sc.scale, sc.x, sc.y, sc.encode_ms
+                    )),
+                    Err(e) => log_event(&app, "capture", &format!("屏幕 {i} 截屏失败:{e}")),
+                }
+                result
+            })
+        })
+        .collect();
+    // 失败兜底:close_all_overlays 会按 label 关闭已创建的隐藏遮罩窗并恢复主窗
+    let setup = || -> Result<(), String> {
+        let mut created = Vec::new();
+        for i in 0..count {
+            let label = format!("region-overlay-{i}");
+            let window = WebviewWindowBuilder::new(
+                &app,
+                label.clone(),
+                WebviewUrl::App("index.html".into()),
+            )
+            .title(format!("屏幕选区 {}", i + 1))
+            .decorations(false)
+            .resizable(false)
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .visible(false)
+            .background_color(tauri::window::Color(0, 0, 0, 255))
+            .build()
+            .map_err(|e| {
+                log_event(&app, "capture", &format!("遮罩窗 {label} 创建失败:{e}"));
+                e.to_string()
+            })?;
+            created.push((label, window));
+        }
+        let captures: Vec<ScreenCapture> = handles
+            .into_iter()
+            .enumerate()
+            .map(|(i, h)| {
+                h.join()
+                    .map_err(|e| format!("截屏线程崩溃:{e:?}"))?
+                    .map_err(|e| format!("屏幕 {i} 截屏失败:{e}"))
+            })
+            .collect::<Result<Vec<_>, String>>()?;
+        *app.state::<CaptureState>().0.lock().unwrap() = captures;
+        log_event(&app, "capture", &format!("截屏+编码全部完成,累计 {}ms", t0.elapsed().as_millis()));
+        // 物理像素落位后显示(几何与显示器一一对应,混合 DPI 无歧义)
+        for (i, (label, window)) in created.iter().enumerate() {
+            let (gx, gy, gw, gh) = geoms[i];
+            if let Err(e) = window
+                .set_position(Position::Physical(PhysicalPosition::new(gx, gy)))
+                .and_then(|_| window.set_size(Size::Physical(PhysicalSize::new(gw, gh))))
+                .and_then(|_| window.show())
+            {
+                log_event(&app, "capture", &format!("遮罩窗 {label} 几何落位失败:{e}"));
+            }
+            let scale = window.scale_factor().unwrap_or(0.0);
+            let inner = window.inner_size().map(|s| (s.width, s.height)).unwrap_or((0, 0));
+            log_event(
+                &app,
+                "capture",
+                &format!(
+                    "遮罩窗 {label} 几何就位并显示:物理 ({gx},{gy}) {gw}x{gh},scale {scale:.2},inner {}x{},累计 {}ms",
+                    inner.0, inner.1, t0.elapsed().as_millis()
+                ),
+            );
+        }
+        Ok(())
+    };
+    if let Err(e) = setup() {
+        close_all_overlays(&app);
+        set_main_window_visible(&app, true)?;
+        return Err(e);
+    }
     Ok(())
 }
 
@@ -298,13 +300,12 @@ async fn get_capture(app: AppHandle, index: usize) -> Result<Option<CaptureData>
         .unwrap()
         .get(index)
         .map(|s| s.data.clone());
-    match &capture {
-        Some(data) => log_event(
+    if let Some(data) = &capture {
+        log_event(
             &app,
             "capture",
             &format!("遮罩窗 {index} 取图:{}x{},base64 {} 字符", data.width, data.height, data.png_base64.len()),
-        ),
-        None => log_event(&app, "capture", &format!("遮罩窗 {index} 取图失败:状态为空(可能非应用内发起)")),
+        );
     }
     Ok(capture)
 }

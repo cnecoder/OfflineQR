@@ -37,9 +37,14 @@ async function boot(): Promise<void> {
   const index = await resolveIndex()
   log('overlay', `启动:index=${index},视口 ${window.innerWidth}x${window.innerHeight},dpr=${window.devicePixelRatio}`)
 
+  // 截屏在 Rust 侧与遮罩窗创建并行进行:轮询取图直到就绪(最多 3s)
   let data: CaptureData | null = null
+  const fetchT0 = performance.now()
   try {
-    data = await invoke<CaptureData | null>('get_capture', { index })
+    for (let tries = 0; tries < 60 && !data; tries++) {
+      data = await invoke<CaptureData | null>('get_capture', { index })
+      if (!data) await new Promise(r => setTimeout(r, 50))
+    }
   } catch (err) {
     log('overlay', `get_capture 调用失败:${err instanceof Error ? err.message : String(err)}`)
   }
@@ -53,7 +58,7 @@ async function boot(): Promise<void> {
     document.body.append(root)
     return
   }
-  log('overlay', `截屏数据就绪:${data.width}x${data.height},base64 ${data.png_base64.length} 字符`)
+  log('overlay', `截屏数据就绪(等待 ${Math.round(performance.now() - fetchT0)}ms):${data.width}x${data.height},base64 ${data.png_base64.length} 字符`)
 
   const image = document.createElement('img')
   image.className = 'overlay-image'

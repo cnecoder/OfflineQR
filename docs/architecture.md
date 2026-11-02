@@ -90,7 +90,7 @@ File / Blob
 主窗 [屏幕选区] 按钮(仅 __TAURI_INTERNALS__ 存在时显示)
   → invoke start_capture
       Rust: 隐藏主窗(主线程同步)+ 等待 DWM 重新合成(150ms,防残影)→ 逐屏并行截屏(screenshots crate)
-            → 每屏 PNG/base64 存入 Mutex<Vec<ScreenCapture>>(含该屏逻辑坐标 = 物理 / scale_factor)
+            → 每屏 PNG/base64 + 物理几何存入 Mutex<Vec<ScreenCapture>>(混合 DPI 下逻辑换算有歧义,一律用物理像素)
       Rust: 每个显示器创建一个遮罩窗口 region-overlay-<i>(无边框置顶,按逻辑坐标定位,
             以 visible=false 隐藏创建——规避 Windows 开窗展开动画)
 遮罩窗(main.ts 按窗口 label 序号进入 overlay 模式)
@@ -129,8 +129,10 @@ Rust(finish/cancel):关闭全部遮罩;finish 额外 emit "region-captured"(pngB
 | ShareX | 冻结的整虚拟桌面合成位图 + 单一选区 UI | "冻结屏幕"防闪烁(本项目用静态截图垫底,等效) |
 | ksnip | 全组合 + 逐屏两种捕获模式 | 混合分辨率下表现较好,可作为后期"整桌ation单选区"模式的参考 |
 
-结论:逐屏遮罩是主流做法;三者的共同翻车点是混合 DPI 多屏——本项目已在遮罩定位与
-裁剪换算处统一走"物理 px ↔ 逻辑 px(÷scale_factor)"换算,并写入日志便于定位。
+结论:逐屏遮罩是主流做法;三者的共同翻车点是混合 DPI 多屏——本项目遮罩窗几何统一使用
+物理像素落位(隐藏创建 → set_position/set_size(Physical) → show):逻辑坐标经"窗口创建时
+所在显示器"的缩放换算会产生 1.5 倍级错位(2K@150% 主屏 + FHD@100% 副屏实测),物理值与
+显示器一一对应、无歧义;每屏 scale_factor 与实测视口写入日志便于定位。
 
 ### 诊断日志(2026-11-01)
 

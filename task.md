@@ -71,6 +71,7 @@
 | 27 | `chore: OfflineQRScanner product identity` | 本分支产品名 OfflineQRScanner(带版本号):productName/bin/identifier(com.offlineqr.scanner,独立数据目录)、标题栏显示 v1.2.0、绿色版/CI zip 名同步;移除遗留的"识别/生成"Tab 导航(样式已随生成剥离,导航块漏删) | ✔ 已完成(单测 + 构建全绿;待 exe 人工复测) |
 | 28 | `feat: brand icon A-finder` | 图标定稿候选 A「定位角」(黑白灰银):1024 源图逐像素绘制(深灰渐变底 + 银渐变描边定位角 + 白芯 + 右下数据点阵,四角透明),`tauri icon` 派生全平台尺寸(ico/icns/png/Store);favicon 同步;B(扫描线)/E(矩阵渐隐)设计稿存档 docs/design/icons/ | ✔ 已完成 |
 | 28 | `ci: dual-tag release` | 双 tag 发布:v*(全功能线 OfflineQR)/ scanner-v*(识别线 OfflineQRScanner);版本守卫按前缀剥离比对;releaseName 按前缀;绿色版上传改 glob 解耦产品名;发版前加单测兜底;远程旧 release(v1.2.0/v1.1.1/v1.1.0)与 tag 已删除 | ✔ 已完成(闭环验证:scanner-v1.2.0 发布) |
+| 29 | `fix: physical-pixel overlay geometry` | 第三方反馈 2K 屏选区遮罩放大 1.5 倍遮挡邻屏:混合 DPI 下遮罩窗逻辑坐标经"窗口创建时所在显示器"的缩放换算(主屏 2K@150% 时副屏遮罩放大 1.5 倍);遮罩窗几何全面改物理像素——隐藏创建 → set_position/set_size(Physical) 落位 → show,每屏 scale_factor 与实测 inner_size 入日志;100% 单一缩放环境行为不变 | ✔ 已完成(待混合 DPI 真机复测) |
 
 每步完成后:勾选下方对应任务 + 更新本表状态 + commit。
 
@@ -183,3 +184,4 @@
 - 2026-11-01 **回退:整窗圆角方案实测不佳**,恢复原生边框窗口(代码精确还原至 32a179c);实验实现保留在 6d6bec6/74bb149 与对应回退提交中,后续若重拾可参考。
 - 2026-11-01 **产品改名**(人工反馈):工具名 **OfflineQR**,界面标题 **极简二维码**——productName/identifier/窗口标题/界面/E2E 选择器/绿色版脚本/Release 工作流/README 同步;Cargo 与 npm 包名保持 qr-tool(debug exe 路径稳定)。待办:README 内容整体刷新(仍停留在 v1.0 识别版描述)。
 - 2026-11-01 **对内改名**(人工反馈"对内对外名字全改"):Cargo 包 offlineqr、二进制 **OfflineQR.exe**(debug/release 产物名统一)、lib offlineqr_lib、npm 包 offlineqr、日志文件 offlineqr-YYYYMMDD.log(当日旧 qr-tool-*.log 保留)、绿色版与 CI zip 名 OfflineQR_*;debug exe 路径变为 target/debug/OfflineQR.exe。
+- 2026-11-02 **fix:遮罩窗混合 DPI 几何错位**(第三方反馈 2K 屏选区放大 1.5 倍遮挡邻屏):逻辑坐标经"窗口创建时所在显示器"的缩放换算是歧义源头;遮罩窗几何全面改物理像素(隐藏创建 → Physical 落位 → show),scale_factor/实测视口入日志;100% 环境行为不变。

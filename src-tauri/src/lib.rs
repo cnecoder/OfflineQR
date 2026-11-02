@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use base64::Engine as _;
 use chrono::Local as LocalTime;
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_global_shortcut::{Builder as GlobalShortcutBuilder, GlobalShortcutExt, Shortcut, ShortcutState};
 
@@ -71,7 +71,8 @@ struct CaptureData {
     png_base64: String,
 }
 
-/// 单个显示器的截屏与其逻辑坐标(物理坐标 / 缩放比),用于遮罩窗口跨屏定位
+/// 单个显示器的截屏与物理几何(混合 DPI 下"逻辑值经创建时主屏缩放换算"有歧义,
+/// 曾致 2K+150% 屏的遮罩窗放大 1.5 倍遮挡邻屏——遮罩窗统一用物理像素定位)
 #[derive(Clone)]
 struct ScreenCapture {
     data: CaptureData,
@@ -79,6 +80,7 @@ struct ScreenCapture {
     y: f64,
     w: f64,
     h: f64,
+    scale: f32,
 }
 
 #[derive(Default)]
@@ -104,7 +106,7 @@ fn capture_screen(screen: &screenshots::Screen) -> Result<CaptureData, String> {
     })
 }
 
-/// 逐屏截屏;坐标换算为逻辑值(物理 / 缩放),供遮罩窗口跨屏定位。
+/// 逐屏截屏;几何一律使用物理像素(与显示器一一对应,无缩放换算歧义)。
 /// 多屏并行截屏以压缩总耗时。
 fn capture_all_screens() -> Result<Vec<ScreenCapture>, String> {
     let screens = screenshots::Screen::all().map_err(|e| e.to_string())?;
@@ -117,13 +119,13 @@ fn capture_all_screens() -> Result<Vec<ScreenCapture>, String> {
             .map(|screen| {
                 scope.spawn(move || {
                     let data = capture_screen(screen)?;
-                    let scale = f64::from(screen.display_info.scale_factor).max(1.0);
                     Ok(ScreenCapture {
                         data,
-                        x: f64::from(screen.display_info.x) / scale,
-                        y: f64::from(screen.display_info.y) / scale,
-                        w: f64::from(screen.display_info.width) / scale,
-                        h: f64::from(screen.display_info.height) / scale,
+                        x: f64::from(screen.display_info.x),
+                        y: f64::from(screen.display_info.y),
+                        w: f64::from(screen.display_info.width),
+                        h: f64::from(screen.display_info.height),
+                        scale: screen.display_info.scale_factor,
                     })
                 })
             })
@@ -210,8 +212,8 @@ async fn start_capture(app: AppHandle) -> Result<(), String> {
             &app,
             "capture",
             &format!(
-                "屏幕 {i}: {}x{} px, 逻辑位置 ({:.0},{:.0}) 尺寸 {:.0}x{:.0}",
-                sc.data.width, sc.data.height, sc.x, sc.y, sc.w, sc.h
+                "屏幕 {i}: {}x{} px @scale {:.2},物理位置 ({:.0},{:.0})",
+                sc.data.width, sc.data.height, sc.scale, sc.x, sc.y
             ),
         );
     }
@@ -224,7 +226,9 @@ async fn start_capture(app: AppHandle) -> Result<(), String> {
             guard[i].clone()
         };
         let label = format!("region-overlay-{i}");
-        WebviewWindowBuilder::new(
+        // 创建时隐藏:混合 DPI 下逻辑坐标经"窗口创建时所在显示器"的缩放换算会产生
+        // 1.5 倍级错位——先以默认尺寸创建,再用物理像素落位(与显示器一一对应),就位后显示
+        let window = WebviewWindowBuilder::new(
             &app,
             label.clone(),
             WebviewUrl::App("index.html".into()),
@@ -234,23 +238,41 @@ async fn start_capture(app: AppHandle) -> Result<(), String> {
         .resizable(false)
         .always_on_top(true)
         .skip_taskbar(true)
+        .visible(false)
         .background_color(tauri::window::Color(0, 0, 0, 255))
-        .position(screen.x, screen.y)
-        .inner_size(screen.w, screen.h)
         .build()
         .map_err(|e| {
             log_event(&app, "capture", &format!("遮罩窗 {label} 创建失败:{e}"));
             e.to_string()
         })?;
+        if let Err(e) = window
+            .set_position(Position::Physical(PhysicalPosition::new(
+                screen.x as i32,
+                screen.y as i32,
+            )))
+            .and_then(|_| {
+                window.set_size(Size::Physical(PhysicalSize::new(
+                    screen.w as u32,
+                    screen.h as u32,
+                )))
+            })
+            .and_then(|_| window.show())
+        {
+            log_event(&app, "capture", &format!("遮罩窗 {label} 几何落位失败:{e}"));
+        }
+        let scale = window.scale_factor().unwrap_or(0.0);
+        let inner = window.inner_size().map(|s| (s.width, s.height)).unwrap_or((0, 0));
         log_event(
             &app,
             "capture",
             &format!(
-                "遮罩窗 {label} 已创建(即时可见,黑色首帧),({:.0},{:.0}) {:.0}x{:.0},累计 {}ms",
+                "遮罩窗 {label} 几何就位并显示:物理 ({:.0},{:.0}) {:.0}x{:.0},scale {scale:.2},inner {}x{},累计 {}ms",
                 screen.x,
                 screen.y,
                 screen.w,
                 screen.h,
+                inner.0,
+                inner.1,
                 t0.elapsed().as_millis()
             ),
         );
@@ -259,7 +281,7 @@ async fn start_capture(app: AppHandle) -> Result<(), String> {
         &app,
         "capture",
         &format!(
-            "全部遮罩创建完成(隐藏),共 {count} 屏,总耗时 {}ms;待前端就绪后显示",
+            "全部遮罩几何就位并显示,共 {count} 屏,总耗时 {}ms",
             t0.elapsed().as_millis()
         ),
     );

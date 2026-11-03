@@ -75,6 +75,7 @@
 | 30 | `perf: parallel capture and fast png` | 弹出耗时优化(1080p×2 日志实测 ~1.7s):① PNG 编码换 Fast 压缩+无滤镜(默认压缩 ~1.1s 是大头);② 截屏线程与遮罩窗创建(隐藏)并行、遮罩前端轮询取图(3s 上限),就绪即物理落位显示;启动失败回滚:关闭隐藏遮罩 + 恢复主窗 | ✔ 已完成(待实测计时) |
 | 31 | `feat: right-click cancel in overlay` | 遮罩上右键取消选区与识别(左键拖拽选区不受影响:pointerdown/up 增加 button 校验,防右键误触发拖拽);遮罩底部加操作提示条(左键拖拽 · 右键取消 · Esc 取消) | ✔ 已完成(待实测) |
 | 32 | `chore: release scanner-v1.2.1` | 版本发布规范与流程入文档(双产品线 tag 规范/流程/纪律);中英双版 Release Note(docs/release-notes/scanner-v1.2.1.*.md);版本升至 1.2.1(conf/package/Cargo 三处)并打 tag 触发 CI 发布 | ✔ 已完成 |
+| 33 | `perf: raw rgba binary ipc` | 取图链路去 PNG 化:截屏保留原始 RGBA → 二进制 IPC(tauri::ipc::Response)直传遮罩窗 → putImageData 直上屏。免 PNG 编码/解码与 base64/JSON(便携版实测占弹出延迟 ~0.8s);2K 屏与 1080p 的差距缩小到传输体积差 | ✔ 已完成(待实测计时) |
 
 每步完成后:勾选下方对应任务 + 更新本表状态 + commit。
 

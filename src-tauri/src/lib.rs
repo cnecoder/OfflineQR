@@ -1,5 +1,4 @@
-use std::io::{Cursor, Write as _};
-use image::ImageEncoder as _;
+use std::io::Write as _;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -65,22 +64,17 @@ fn log_event(app: &AppHandle, scope: &str, message: &str) {
     write_line(app, &format!("[{ts}][{scope}] {message}"));
 }
 
-#[derive(Serialize, Clone)]
-struct CaptureData {
-    width: u32,
-    height: u32,
-    png_base64: String,
-}
-
-/// 单个显示器的截屏与物理几何(混合 DPI 下"逻辑值经创建时主屏缩放换算"有歧义,
-/// 曾致 2K+150% 屏的遮罩窗放大 1.5 倍遮挡邻屏——遮罩窗统一用物理像素定位)
+/// 单个显示器的截屏(原始 RGBA)与物理几何(混合 DPI 下"逻辑值经创建时主屏缩放
+/// 换算"有歧义,曾致 2K+150% 屏的遮罩窗放大 1.5 倍遮挡邻屏——统一用物理像素定位)
 #[derive(Clone)]
 struct ScreenCapture {
-    data: CaptureData,
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
     x: f64,
     y: f64,
     scale: f32,
-    encode_ms: u32,
+    capture_ms: u32,
 }
 
 #[derive(Default)]
@@ -92,31 +86,22 @@ struct CaptureState(Mutex<Vec<ScreenCapture>>);
 /// 遮罩窗展示底图时主窗就以"半透明残影"出现(Flameshot/Snipaste 同样留此等待)。
 const DWM_RECOMPOSE_WAIT: Duration = Duration::from_millis(150);
 
-/// 截屏 + 快速 PNG 编码(CompressionType::Fast + 无滤镜:默认压缩在 1080p 上要
-/// 数百毫秒,是"点击到遮罩弹出"延迟的大头;Fast 体积略大但本机 IPC 场景可接受)
+/// 截屏:直接保留原始 RGBA 像素——不做任何编码/压缩/缩放,
+/// 经二进制 IPC(tauri::ipc::Response)直传遮罩窗,免 base64/JSON/PNG 解码
+/// (曾实测:PNG 编码 60-75ms + base64/JSON 传输 ~390ms + 前端解码 430-480ms 全部白费)。
 fn capture_screen(screen: &screenshots::Screen) -> Result<ScreenCapture, String> {
     let t0 = Instant::now();
-    let image = screen.capture().map_err(|e| e.to_string())?;
+    let image = screen.capture().map_err(|e| e.to_string())?; // ImageBuffer<Rgba8>
     let (width, height) = (image.width(), image.height());
-    let rgba = image.into_raw(); // 已是 RGBA
-    let mut png = Cursor::new(Vec::new());
-    image::codecs::png::PngEncoder::new_with_quality(
-        &mut png,
-        image::codecs::png::CompressionType::Fast,
-        image::codecs::png::FilterType::NoFilter,
-    )
-    .write_image(&rgba, width, height, image::ColorType::Rgba8)
-    .map_err(|e| e.to_string())?;
+    let rgba = image.into_raw();
     Ok(ScreenCapture {
-        data: CaptureData {
-            width,
-            height,
-            png_base64: base64::engine::general_purpose::STANDARD.encode(png.get_ref()),
-        },
+        width,
+        height,
+        rgba,
         x: f64::from(screen.display_info.x),
         y: f64::from(screen.display_info.y),
         scale: screen.display_info.scale_factor,
-        encode_ms: t0.elapsed().as_millis() as u32,
+        capture_ms: t0.elapsed().as_millis() as u32,
     })
 }
 
@@ -205,7 +190,7 @@ async fn start_capture(app: AppHandle) -> Result<(), String> {
             )
         })
         .collect();
-    // 截屏+编码在后台线程并行执行;遮罩窗创建(主线程串行)与其同时进行
+    // 截屏(后台线程)与遮罩窗创建(主线程)并行执行;原始像素经二进制 IPC 直传
     let handles: Vec<_> = screens
         .into_iter()
         .enumerate()
@@ -215,8 +200,8 @@ async fn start_capture(app: AppHandle) -> Result<(), String> {
                 let result = capture_screen(&screen);
                 match &result {
                     Ok(sc) => log_event(&app, "capture", &format!(
-                        "屏幕 {i}: {}x{} px @scale {:.2},物理位置 ({:.0},{:.0}),截屏+编码 {}ms",
-                        sc.data.width, sc.data.height, sc.scale, sc.x, sc.y, sc.encode_ms
+                        "屏幕 {i}: {}x{} px @scale {:.2},物理位置 ({:.0},{:.0}),截屏 {}ms",
+                        sc.width, sc.height, sc.scale, sc.x, sc.y, sc.capture_ms
                     )),
                     Err(e) => log_event(&app, "capture", &format!("屏幕 {i} 截屏失败:{e}")),
                 }
@@ -290,24 +275,27 @@ async fn start_capture(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 遮罩窗启动时取回自己那一屏的截屏数据(按窗口序号)
+/// 遮罩窗取原始截屏:二进制载荷 = 宽度 u32 LE + 高度 u32 LE + RGBA 像素,
+/// 免 base64/JSON/PNG 解码。截屏未就绪时返回空载荷,遮罩窗前端轮询。
 #[tauri::command]
-async fn get_capture(app: AppHandle, index: usize) -> Result<Option<CaptureData>, String> {
-    let capture = app
-        .state::<CaptureState>()
-        .0
-        .lock()
-        .unwrap()
-        .get(index)
-        .map(|s| s.data.clone());
-    if let Some(data) = &capture {
-        log_event(
-            &app,
-            "capture",
-            &format!("遮罩窗 {index} 取图:{}x{},base64 {} 字符", data.width, data.height, data.png_base64.len()),
-        );
+fn get_capture_raw(app: AppHandle, index: usize) -> Result<tauri::ipc::Response, String> {
+    let state = app.state::<CaptureState>();
+    let guard = state.0.lock().unwrap();
+    let payload = match guard.get(index) {
+        Some(sc) => {
+            let mut p = Vec::with_capacity(8 + sc.rgba.len());
+            p.extend_from_slice(&sc.width.to_le_bytes());
+            p.extend_from_slice(&sc.height.to_le_bytes());
+            p.extend_from_slice(&sc.rgba);
+            p
+        }
+        None => Vec::new(),
+    };
+    drop(guard);
+    if payload.len() > 8 {
+        log_event(&app, "capture", &format!("遮罩窗 {index} 取图:原始 {} 字节", payload.len()));
     }
-    Ok(capture)
+    Ok(tauri::ipc::Response::new(payload))
 }
 
 /// 选区完成:Rust 侧只做中转(裁剪由遮罩窗 canvas 完成),关闭全部遮罩并广播给主窗
@@ -490,7 +478,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             start_capture,
-            get_capture,
+            get_capture_raw,
             finish_capture,
             cancel_capture,
             append_log,

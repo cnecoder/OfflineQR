@@ -70,6 +70,7 @@
 | 26 | `chore: rename internals to offlineqr` | 对内改名:Cargo 包名 qr-tool → offlineqr、二进制 OfflineQR.exe(debug 与 release 产物名统一)、lib offlineqr_lib、npm 包名 offlineqr(含 lock)、日志文件 offlineqr-YYYYMMDD.log、绿色版/CI 绿色版 zip 名 OfflineQR_*、E2E 样例 URL;旧日志文件保留可回溯 | ✔ 已完成(98 单测 + 24 E2E 全绿) |
 | 27 | `feat: brand icon A-finder` | 图标定稿候选 A「定位角」(黑白灰银,与 recognition 精简线同款):1024 源图逐像素绘制,`tauri icon` 派生全平台尺寸;favicon 同步;B(扫描线)/E(矩阵渐隐)备选存档 docs/design/icons/ | ✔ 已完成 |
 | 28 | `fix: physical-pixel overlay geometry` | 第三方反馈 2K 屏选区遮罩放大 1.5 倍遮挡邻屏:混合 DPI 下遮罩窗逻辑坐标经"窗口创建时所在显示器"的缩放换算(主屏 2K@150% 时副屏遮罩放大 1.5 倍);遮罩窗几何全面改物理像素——隐藏创建 → set_position/set_size(Physical) 落位 → show,每屏 scale_factor 与实测 inner_size 入日志;100% 单一缩放环境行为不变 | ✔ 已完成(待混合 DPI 真机复测) |
+| 30 | `perf: raw rgba binary ipc` | 取图链路去 PNG 化:截屏保留原始 RGBA → 二进制 IPC(tauri::ipc::Response)直传遮罩窗 → putImageData 直上屏。免 PNG 编码/解码与 base64/JSON(实测占弹出延迟 ~0.8s);2K 屏与 1080p 的差距缩小到传输体积差 | ✔ 已完成(待实测计时) |
 | 29 | `perf: parallel capture and fast png` | 弹出耗时优化(1080p×2 日志实测 ~1.7s):① PNG 编码换 Fast 压缩+无滤镜(默认压缩 ~1.1s 是大头);② 截屏线程与遮罩窗创建(隐藏)并行、遮罩前端轮询取图(3s 上限),就绪即物理落位显示;启动失败回滚:关闭隐藏遮罩 + 恢复主窗 | ✔ 已完成(待实测计时) |
 | 30 | `feat: right-click cancel in overlay` | 遮罩上右键取消选区与识别(左键拖拽选区不受影响:pointerdown/up 增加 button 校验,防右键误触发拖拽);遮罩底部加操作提示条(左键拖拽 · 右键取消 · Esc 取消) | ✔ 已完成(待实测) |
 

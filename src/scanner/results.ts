@@ -104,6 +104,42 @@ export function selectTextContents(el: HTMLElement): void {
   selection.addRange(range)
 }
 
+/** 自绘闪烁光标(非 contenteditable:绕开 plaintext-only 的强制 pre 格式) */
+let caretEl: HTMLElement | null = null
+function showFakeCaret(x: number, y: number, height: number): void {
+  if (!caretEl) {
+    caretEl = document.createElement('div')
+    caretEl.id = 'fake-caret'
+    document.body.append(caretEl)
+  }
+  caretEl.style.left = `${x}px`
+  caretEl.style.top = `${y}px`
+  caretEl.style.height = `${height}px`
+  caretEl.style.display = 'block'
+}
+
+function hideFakeCaret(): void {
+  if (caretEl) caretEl.style.display = 'none'
+}
+
+/** 在文本块内 (clientX, clientY) 处放置光标:塌陷选区 + 闪烁光标条 */
+function placeFakeCaretAt(el: HTMLElement, x: number, y: number): void {
+  const doc = el.ownerDocument as Document & {
+    caretRangeFromPoint?: (x: number, y: number) => Range | null
+  }
+  const range = doc.caretRangeFromPoint?.(x, y) ?? null
+  const selection = window.getSelection()
+  if (!selection) return
+  if (range && el.contains(range.startContainer)) {
+    selection.removeAllRanges()
+    selection.addRange(range)
+  }
+  const rects = selection.rangeCount > 0 ? selection.getRangeAt(0).getClientRects() : []
+  const r = rects[0]
+  if (r) showFakeCaret(r.left, r.top, r.height || 18)
+  else hideFakeCaret()
+}
+
 /** 单条文本行:默认单行省略(卡片等高),点击展开全部 + 右侧复制按钮 */
 function textRow(text: string, options: ResultRenderOptions): HTMLElement {
   const row = document.createElement('div')
@@ -112,18 +148,15 @@ function textRow(text: string, options: ResultRenderOptions): HTMLElement {
   const pre = document.createElement('p')
   pre.className = 'result-text collapsed'
   pre.dataset.testid = 'result-text'
-  // 可编辑外观:点击出光标、可拖选复制;beforeinput 全拦截,内容不可被修改
-  pre.setAttribute('contenteditable', 'plaintext-only')
-  pre.spellcheck = false
   const line = document.createElement('span')
   line.className = 'result-line'
   line.textContent = text
   pre.append(line)
-  pre.addEventListener('beforeinput', e => e.preventDefault())
-  // 点击:光标落在点击位置(原生行为)+ 展开全部;点击块外收起(统一绑定)
-  pre.addEventListener('click', () => {
+  // 点击:在点击位置放闪烁光标(自绘,见 placeFakeCaretAt)+ 展开全部;块外收起
+  pre.addEventListener('click', event => {
     pre.classList.remove('collapsed')
     pre.classList.add('expanded')
+    placeFakeCaretAt(pre, event.clientX, event.clientY)
   })
   row.append(pre)
 
@@ -165,12 +198,15 @@ function bindTextInteractions(): void {
   interactionsBound = true
   document.addEventListener('pointerdown', event => {
     const node = event.target as Node | null
+    const insideText = node instanceof Element && !!node.closest('.result-text')
     document.querySelectorAll<HTMLElement>('.result-text.expanded').forEach(el => {
       if (node === null || !el.contains(node)) {
         el.classList.remove('expanded')
         el.classList.add('collapsed')
       }
     })
+    // 点在文本块外(或收起)时隐藏自绘光标
+    if (!insideText) hideFakeCaret()
   })
   document.addEventListener(
     'keydown',

@@ -135,6 +135,31 @@ fn set_main_window_visible(app: &AppHandle, visible: bool) -> Result<(), String>
     Ok(())
 }
 
+/// 恢复主窗并置前:最小化的窗口用 show() 只会取消隐藏、不会还原最小化状态
+/// (Win32 SW_SHOW ≠ SW_RESTORE)——选区识别完成后无论成功失败都走这里,
+/// 把结果窗口弹到用户眼前供查看/复制。主线程执行(跨线程 ShowWindow 不可靠)。
+fn restore_main_window(app: &AppHandle) -> Result<(), String> {
+    let handle = app.clone();
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    app.run_on_main_thread(move || {
+        if let Some(window) = handle.get_webview_window("main") {
+            if window.is_minimized().unwrap_or(false) {
+                let _ = window.unminimize();
+            }
+            let _ = window.show();
+            let _ = window.set_focus();
+            log_event(&handle, "capture", "主窗已恢复显示并置前(最小化状态已还原)");
+        } else {
+            log_event(&handle, "capture", "未找到主窗(label 不匹配)");
+        }
+        let _ = tx.send(());
+    })
+    .map_err(|e| e.to_string())?;
+    // 与 set_main_window_visible 相同的确认模式(最多等 500ms)
+    let _ = rx.recv_timeout(Duration::from_millis(500));
+    Ok(())
+}
+
 fn close_all_overlays(app: &AppHandle) {
     for (label, window) in app.webview_windows() {
         if label.starts_with("region-overlay") {
@@ -149,10 +174,19 @@ fn toggle_main_window(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         if let Some(window) = handle.get_webview_window("main") {
+            let minimized = window.is_minimized().unwrap_or(false);
             let visible = window.is_visible().unwrap_or(false);
-            let result = if visible { window.hide() } else { window.show() };
+            // 最小化时优先还原+聚焦(SW_SHOW 不会还原最小化窗口)
+            let action = if minimized || !visible { "恢复显示" } else { "隐藏" };
+            let result = if minimized {
+                window.unminimize().and_then(|_| window.show()).and_then(|_| window.set_focus())
+            } else if visible {
+                window.hide()
+            } else {
+                window.show().and_then(|_| window.set_focus())
+            };
             match result {
-                Ok(_) => log_event(&handle, "hotkey", &format!("快捷键切换主窗{}", if visible { "隐藏" } else { "显示" })),
+                Ok(_) => log_event(&handle, "hotkey", &format!("快捷键切换主窗{action}")),
                 Err(e) => log_event(&handle, "hotkey", &format!("快捷键切换主窗失败:{e}")),
             }
         }
@@ -269,7 +303,7 @@ async fn start_capture(app: AppHandle) -> Result<(), String> {
     };
     if let Err(e) = setup() {
         close_all_overlays(&app);
-        set_main_window_visible(&app, true)?;
+        restore_main_window(&app)?;
         return Err(e);
     }
     Ok(())
@@ -298,18 +332,19 @@ fn get_capture_raw(app: AppHandle, index: usize) -> Result<tauri::ipc::Response,
     Ok(tauri::ipc::Response::new(payload))
 }
 
-/// 选区完成:Rust 侧只做中转(裁剪由遮罩窗 canvas 完成),关闭全部遮罩并广播给主窗
+/// 选区完成:Rust 侧只做中转(裁剪由遮罩窗 canvas 完成),关闭全部遮罩并广播给主窗。
+/// 无论识别成功失败,主窗一律恢复+置前(最小化的也会还原),让用户直接查看/复制结果
 #[tauri::command]
 async fn finish_capture(app: AppHandle, png_base64: String) -> Result<(), String> {
     log_event(&app, "capture", &format!("选区完成,回传 PNG base64 {} 字符", png_base64.len()));
     *app.state::<CaptureState>().0.lock().unwrap() = Vec::new();
     close_all_overlays(&app);
-    set_main_window_visible(&app, true)?;
+    restore_main_window(&app)?;
     app.emit("region-captured", png_base64)
         .map_err(|e| e.to_string())
 }
 
-/// 取消选区:关闭全部遮罩
+/// 取消选区:关闭全部遮罩并恢复主窗(用户主动取消,不抢焦点只显示)
 #[tauri::command]
 async fn cancel_capture(app: AppHandle) -> Result<(), String> {
     log_event(&app, "capture", "选区取消");

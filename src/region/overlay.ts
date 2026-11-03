@@ -7,12 +7,6 @@ import { overlayIndexFromLabel, createSelection, type Rect } from './selection'
 window.addEventListener('error', event => log('window', `未捕获异常:${event.message}`))
 window.addEventListener('unhandledrejection', event => log('window', `未处理的 Promise 拒绝:${String(event.reason)}`))
 
-interface CaptureData {
-  width: number
-  height: number
-  png_base64: string
-}
-
 const MIN_SIZE = 4
 
 /** 遮罩窗口按 label 序号(region-overlay-<i>)对应各自的截屏数据 */
@@ -37,33 +31,47 @@ async function boot(): Promise<void> {
   const index = await resolveIndex()
   log('overlay', `启动:index=${index},视口 ${window.innerWidth}x${window.innerHeight},dpr=${window.devicePixelRatio}`)
 
-  // 截屏在 Rust 侧与遮罩窗创建并行进行:轮询取图直到就绪(最多 3s)
-  let data: CaptureData | null = null
+  // 截屏在 Rust 侧与遮罩窗创建并行进行:轮询取原始 RGBA(二进制 IPC)直到就绪(最多 3s)
+  let buf: ArrayBuffer | null = null
   const fetchT0 = performance.now()
   try {
-    for (let tries = 0; tries < 60 && !data; tries++) {
-      data = await invoke<CaptureData | null>('get_capture', { index })
-      if (!data) await new Promise(r => setTimeout(r, 50))
+    for (let tries = 0; tries < 60 && !buf; tries++) {
+      buf = await invoke<ArrayBuffer>('get_capture_raw', { index })
+      if (!buf || buf.byteLength <= 8) {
+        buf = null
+        await new Promise(r => setTimeout(r, 40))
+      }
     }
   } catch (err) {
-    log('overlay', `get_capture 调用失败:${err instanceof Error ? err.message : String(err)}`)
+    log('overlay', `get_capture_raw 调用失败:${err instanceof Error ? err.message : String(err)}`)
   }
 
   const root = document.createElement('div')
   root.className = 'overlay'
-  if (!data) {
+  if (!buf) {
     log('overlay', '无截屏数据,降级为提示文案')
     root.classList.add('visible')
     root.textContent = '未获取到屏幕图像(请在应用内发起屏幕选区)'
     document.body.append(root)
     return
   }
-  log('overlay', `截屏数据就绪(等待 ${Math.round(performance.now() - fetchT0)}ms):${data.width}x${data.height},base64 ${data.png_base64.length} 字符`)
 
-  const image = document.createElement('img')
+  // 载荷:宽度 u32 LE + 高度 u32 LE + RGBA 像素;零解码,putImageData 直上屏
+  const dv = new DataView(buf)
+  const width = dv.getUint32(0, true)
+  const height = dv.getUint32(4, true)
+  const pixels = new Uint8ClampedArray(buf, 8)
+  log('overlay', `截屏数据就绪(等待 ${Math.round(performance.now() - fetchT0)}ms):${width}x${height},原始 RGBA ${buf.byteLength} 字节`)
+
+  const offscreen = new OffscreenCanvas(width, height)
+  offscreen.getContext('2d')?.putImageData(new ImageData(pixels, width, height), 0, 0)
+  const bitmap = await offscreen.transferToImageBitmap()
+
+  const image = document.createElement('canvas')
   image.className = 'overlay-image'
-  image.alt = '屏幕截图'
-  image.src = `data:image/png;base64,${data.png_base64}`
+  image.width = width
+  image.height = height
+  image.getContext('2d')!.drawImage(bitmap, 0, 0)
 
   const canvas = document.createElement('canvas')
   canvas.className = 'overlay-canvas'
@@ -84,7 +92,6 @@ async function boot(): Promise<void> {
 
   const selection = createSelection(MIN_SIZE)
   let dpr = window.devicePixelRatio || 1
-  let bitmap: ImageBitmap | null = null
 
   function redraw(): void {
     ctx!.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -108,20 +115,14 @@ async function boot(): Promise<void> {
   }
 
   async function finish(rect: Rect): Promise<void> {
-    const current = data!
-    const scale = current.width / window.innerWidth
-    const imageRect = toImageRect(rect, scale, current.width, current.height)
+    const scale = width / window.innerWidth
+    const imageRect = toImageRect(rect, scale, width, height)
     log(
       'overlay',
       `选区完成 CSS ${rect.width}x${rect.height} @(${rect.x},${rect.y}) → 图像 ${imageRect.width}x${imageRect.height} @(${imageRect.x},${imageRect.y}),scale=${scale.toFixed(3)}`,
     )
     if (imageRect.width < 2 || imageRect.height < 2) {
       log('overlay', '选区过小,按取消处理')
-      void invoke('cancel_capture').catch(() => {})
-      return
-    }
-    if (!bitmap) {
-      log('overlay', '位图未就绪,按取消处理')
       void invoke('cancel_capture').catch(() => {})
       return
     }
@@ -182,17 +183,9 @@ async function boot(): Promise<void> {
 
   resize()
 
-  // 位图就绪后淡入截图内容(窗口本身创建即可见,首帧纯黑)
-  try {
-    await image.decode()
-    bitmap = await createImageBitmap(image)
-    resize()
-    log('overlay', `截图解码完成,耗时 ${Math.round(performance.now() - t0)}ms,淡入显示`)
-    requestAnimationFrame(() => root.classList.add('visible'))
-  } catch (err) {
-    log('overlay', `截图解码失败:${err instanceof Error ? err.message : String(err)}`)
-    root.classList.add('visible')
-  }
+  // 像素已直接上屏(canvas),淡入即可
+  log('overlay', `遮罩就绪,累计 ${Math.round(performance.now() - t0)}ms,淡入显示`)
+  requestAnimationFrame(() => root.classList.add('visible'))
 }
 
 void boot()

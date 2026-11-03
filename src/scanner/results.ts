@@ -173,12 +173,17 @@ function bindTextInteractions(): void {
   interactionsBound = true
   document.addEventListener('pointerdown', event => {
     const node = event.target as Node | null
+    let collapsedAny = false
     document.querySelectorAll<HTMLElement>('.result-text.expanded').forEach(el => {
       if (node === null || !el.contains(node)) {
         el.classList.remove('expanded')
         el.classList.add('collapsed')
+        collapsedAny = true
       }
     })
+    // 收起后卡片高度回落,缩略图宽度必须重新同步——否则展开期同步的宽度
+    // 会把卡片高度钉住不回缩(img 按固有比例以宽度反推高度)
+    if (collapsedAny) syncThumbWidths(document.querySelector('.results'))
   })
   document.addEventListener(
     'keydown',

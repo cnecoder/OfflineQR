@@ -32,16 +32,6 @@ export function renderResults(
 ): void {
   container.replaceChildren()
   for (const item of items) container.append(renderCard(item, options))
-  syncThumbWidths(container)
-}
-
-/** 缩略图宽度跟随高度保持正方形(高度由内容区拉伸决定;aspect-ratio 在 flex stretch 下对 img 不传递) */
-export function syncThumbWidths(root: HTMLElement | null): void {
-  if (!root) return
-  for (const el of root.querySelectorAll<HTMLElement>('.thumb')) {
-    const h = Math.round(el.getBoundingClientRect().height)
-    if (h > 0) el.style.width = `${h}px`
-  }
 }
 
 export function renderCard(item: ResultItem, options: ResultRenderOptions = {}): HTMLElement {
@@ -122,16 +112,18 @@ function textRow(text: string, options: ResultRenderOptions): HTMLElement {
   const pre = document.createElement('p')
   pre.className = 'result-text collapsed'
   pre.dataset.testid = 'result-text'
+  // 可编辑外观:点击出光标、可拖选复制;beforeinput 全拦截,内容不可被修改
+  pre.setAttribute('contenteditable', 'plaintext-only')
+  pre.spellcheck = false
   const line = document.createElement('span')
   line.className = 'result-line'
   line.textContent = text
   pre.append(line)
-  // 点击展开;点击文本块外任意位置收起(统一绑定,见 bindTextInteractions)
+  pre.addEventListener('beforeinput', e => e.preventDefault())
+  // 点击:光标落在点击位置(原生行为)+ 展开全部;点击块外收起(统一绑定)
   pre.addEventListener('click', () => {
     pre.classList.remove('collapsed')
     pre.classList.add('expanded')
-    // 展开改变卡片高度,缩略图宽度需重新同步
-    syncThumbWidths(pre.closest('.results'))
   })
   row.append(pre)
 
@@ -173,17 +165,12 @@ function bindTextInteractions(): void {
   interactionsBound = true
   document.addEventListener('pointerdown', event => {
     const node = event.target as Node | null
-    let collapsedAny = false
     document.querySelectorAll<HTMLElement>('.result-text.expanded').forEach(el => {
       if (node === null || !el.contains(node)) {
         el.classList.remove('expanded')
         el.classList.add('collapsed')
-        collapsedAny = true
       }
     })
-    // 收起后卡片高度回落,缩略图宽度必须重新同步——否则展开期同步的宽度
-    // 会把卡片高度钉住不回缩(img 按固有比例以宽度反推高度)
-    if (collapsedAny) syncThumbWidths(document.querySelector('.results'))
   })
   document.addEventListener(
     'keydown',

@@ -231,8 +231,8 @@ button.primary:hover {
 }
 .thumb {
   flex-shrink: 0;
-  align-self: stretch;
-  min-height: 44px;
+  width: 64px;
+  height: 64px;
   border-radius: var(--r-sm);
   overflow: hidden;
   background: var(--surface-2);
@@ -287,6 +287,8 @@ button.primary:hover {
   border-radius: var(--r-control);
   padding: 6px 8px;
   user-select: text;
+  caret-color: var(--accent);
+  outline: none;
 }
 .result-line {
   flex: 1;
@@ -300,6 +302,12 @@ button.primary:hover {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 展开态:高度封顶滚动,长文本不再把卡片撑成巨物 */
+.result-text.expanded {
+  max-height: 220px;
+  overflow-y: auto;
+  align-items: flex-start;
 }
 .row-actions {
   display: flex;

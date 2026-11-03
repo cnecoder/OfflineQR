@@ -73,6 +73,7 @@
 | 28 | `ci: dual-tag release` | 双 tag 发布:v*(全功能线 OfflineQR)/ scanner-v*(识别线 OfflineQRScanner);版本守卫按前缀剥离比对;releaseName 按前缀;绿色版上传改 glob 解耦产品名;发版前加单测兜底;远程旧 release(v1.2.0/v1.1.1/v1.1.0)与 tag 已删除 | ✔ 已完成(闭环验证:scanner-v1.2.0 发布) |
 | 29 | `fix: physical-pixel overlay geometry` | 第三方反馈 2K 屏选区遮罩放大 1.5 倍遮挡邻屏:混合 DPI 下遮罩窗逻辑坐标经"窗口创建时所在显示器"的缩放换算(主屏 2K@150% 时副屏遮罩放大 1.5 倍);遮罩窗几何全面改物理像素——隐藏创建 → set_position/set_size(Physical) 落位 → show,每屏 scale_factor 与实测 inner_size 入日志;100% 单一缩放环境行为不变 | ✔ 已完成(待混合 DPI 真机复测) |
 | 30 | `perf: parallel capture and fast png` | 弹出耗时优化(1080p×2 日志实测 ~1.7s):① PNG 编码换 Fast 压缩+无滤镜(默认压缩 ~1.1s 是大头);② 截屏线程与遮罩窗创建(隐藏)并行、遮罩前端轮询取图(3s 上限),就绪即物理落位显示;启动失败回滚:关闭隐藏遮罩 + 恢复主窗 | ✔ 已完成(待实测计时) |
+| 34 | `fix: ipc csp + overlay fail-safe` | 二进制 Response 被 CSP 拦截(connect-src 缺 `ipc: http://ipc.localhost`)→ 遮罩黑屏且取消处理器未挂载,用户被困;修复:CSP 放行 ipc 通道 + 守卫单测固化;取消处理器先行注册(右键/Esc 任何状态可退出);取图失败兜底改为 cancel_capture 恢复主窗(绝不困在黑屏) | ✔ 已完成(待实测) |
 | 31 | `feat: right-click cancel in overlay` | 遮罩上右键取消选区与识别(左键拖拽选区不受影响:pointerdown/up 增加 button 校验,防右键误触发拖拽);遮罩底部加操作提示条(左键拖拽 · 右键取消 · Esc 取消) | ✔ 已完成(待实测) |
 | 32 | `chore: release scanner-v1.2.1` | 版本发布规范与流程入文档(双产品线 tag 规范/流程/纪律);中英双版 Release Note(docs/release-notes/scanner-v1.2.1.*.md);版本升至 1.2.1(conf/package/Cargo 三处)并打 tag 触发 CI 发布 | ✔ 已完成 |
 | 33 | `perf: raw rgba binary ipc` | 取图链路去 PNG 化:截屏保留原始 RGBA → 二进制 IPC(tauri::ipc::Response)直传遮罩窗 → putImageData 直上屏。免 PNG 编码/解码与 base64/JSON(便携版实测占弹出延迟 ~0.8s);2K 屏与 1080p 的差距缩小到传输体积差 | ✔ 已完成(待实测计时) |

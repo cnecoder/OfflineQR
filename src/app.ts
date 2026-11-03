@@ -5,7 +5,7 @@ import { initGeneratePanel } from './generator/panel'
 import { createEngine } from './scanner/engine'
 import { createIngest, isImageFile } from './scanner/ingest'
 import { createSerialQueue } from './scanner/queue'
-import { renderResults, selectTextContents, syncThumbWidths, type ResultItem } from './scanner/results'
+import { renderResults, selectTextContents, type ResultItem } from './scanner/results'
 import { log } from './shared/log'
 import { createProgress, hideToast, showToast } from './shared/status'
 import { getTheme, setTheme } from './shared/theme'
@@ -22,8 +22,6 @@ function switchTab(name: string): void {
   }
   ;(document.getElementById('panel-scan') as HTMLElement).hidden = name !== 'scan'
   ;(document.getElementById('panel-generate') as HTMLElement).hidden = name !== 'generate'
-  // 隐藏期间渲染的卡片拿不到高度,切回识别 Tab 时补一次缩略图宽度同步
-  if (name === 'scan') syncThumbWidths(resultsEl)
 }
 for (const button of tabButtons) {
   button.addEventListener('click', () => switchTab(button.dataset.tab ?? 'scan'))

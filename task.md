@@ -73,6 +73,7 @@
 | 30 | `perf: raw rgba binary ipc` | 取图链路去 PNG 化:截屏保留原始 RGBA → 二进制 IPC(tauri::ipc::Response)直传遮罩窗 → putImageData 直上屏。免 PNG 编码/解码与 base64/JSON(实测占弹出延迟 ~0.8s);2K 屏与 1080p 的差距缩小到传输体积差 | ✔ 已完成(待实测计时) |
 | 29 | `perf: parallel capture and fast png` | 弹出耗时优化(1080p×2 日志实测 ~1.7s):① PNG 编码换 Fast 压缩+无滤镜(默认压缩 ~1.1s 是大头);② 截屏线程与遮罩窗创建(隐藏)并行、遮罩前端轮询取图(3s 上限),就绪即物理落位显示;启动失败回滚:关闭隐藏遮罩 + 恢复主窗 | ✔ 已完成(待实测计时) |
 | 30 | `feat: right-click cancel in overlay` | 遮罩上右键取消选区与识别(左键拖拽选区不受影响:pointerdown/up 增加 button 校验,防右键误触发拖拽);遮罩底部加操作提示条(左键拖拽 · 右键取消 · Esc 取消) | ✔ 已完成(待实测) |
+| 31 | `fix: ipc csp + overlay fail-safe` | 二进制 Response 被 CSP 拦截(connect-src 缺 ipc 通道)→ 遮罩黑屏且取消处理器未挂载;修复:CSP 放行 ipc 通道 + 守卫单测;取消处理器先行注册;取图失败兜底 cancel_capture 恢复主窗 | ✔ 已完成(待实测) |
 | 31 | `fix: restore main window after capture when minimized` | 最小化状态下 Alt+Q 选区识别完成后主窗不弹出:Win32 SW_SHOW 不会还原最小化窗口 → 新增 restore_main_window(unminimize + show + set_focus),finish 与启动失败回滚均走它;Alt+W 最小化时改为还原+聚焦 | ✔ 已完成(待实测) |
 
 每步完成后:勾选下方对应任务 + 更新本表状态 + commit。
@@ -183,6 +184,7 @@
 - 2026-11-01 **回退:整窗圆角方案实测不佳**,恢复原生边框窗口(代码精确还原至 32a179c);实验实现保留在 6d6bec6/74bb149 与对应回退提交中,后续若重拾可参考。
 - 2026-11-01 **产品改名**(人工反馈):工具名 **OfflineQR**,界面标题 **极简二维码**——productName/identifier/窗口标题/界面/E2E 选择器/绿色版脚本/Release 工作流/README 同步;Cargo 与 npm 包名保持 qr-tool(debug exe 路径稳定)。待办:README 内容整体刷新(仍停留在 v1.0 识别版描述)。
 - 2026-11-03 **fix:最小化后选区完成主窗不弹出**(人工反馈):SW_SHOW 不还原最小化状态 → restore_main_window(unminimize+show+set_focus),finish/启动失败统一走该例程;Alt+W 最小化时还原+聚焦;用户主动取消仅显示不抢焦点。
+- 2026-11-03 **fix:原始像素 IPC 黑屏卡死**(内测发现):CSP 拦截二进制 Response 传输 → boot 中断遮罩黑屏;CSP 放行 ipc 通道 + 取消处理器先行注册 + 取图失败兜底恢复主窗。
 - 2026-11-02 **fix:遮罩窗混合 DPI 几何错位**(第三方反馈 2K 屏选区放大 1.5 倍遮挡邻屏):逻辑坐标经"窗口创建时所在显示器"的缩放换算是歧义源头;遮罩窗几何全面改物理像素(隐藏创建 → Physical 落位 → show),scale_factor/实测视口入日志;100% 环境行为不变。
 - 2026-11-03 **perf:弹出耗时优化**:Fast PNG 编码 + 截屏线程/遮罩窗创建并行 + 遮罩前端轮询取图(3s 上限);预期"点击 → 遮罩可见"从 ~1.7s 压到 ~0.8s(debug 环境)。
 - 2026-11-01 **对内改名**(人工反馈"对内对外名字全改"):Cargo 包 offlineqr、二进制 **OfflineQR.exe**(debug/release 产物名统一)、lib offlineqr_lib、npm 包 offlineqr、日志文件 offlineqr-YYYYMMDD.log(当日旧 qr-tool-*.log 保留)、绿色版与 CI zip 名 OfflineQR_*;debug exe 路径变为 target/debug/OfflineQR.exe。

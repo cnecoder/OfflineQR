@@ -44,4 +44,10 @@ describe('tauri.conf.json CSP 守卫(生产构建生效,测试环境不加载)',
   it('connect-src 允许 data:(zxing-wasm 以 data URI 内联 wasm)', () => {
     expect(directive('connect-src')).toContain('data:')
   })
+
+  it('connect-src 放行 ipc 通道(二进制 Response 的 fetch 传输被 CSP 拦截会让遮罩黑屏卡死)', () => {
+    const connect = directive('connect-src')
+    expect(connect).toContain('ipc:')
+    expect(connect).toContain('http://ipc.localhost')
+  })
 })

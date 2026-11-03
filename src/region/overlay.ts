@@ -31,6 +31,19 @@ async function boot(): Promise<void> {
   const index = await resolveIndex()
   log('overlay', `启动:index=${index},视口 ${window.innerWidth}x${window.innerHeight},dpr=${window.devicePixelRatio}`)
 
+  // 取消通道先行注册:无论后续数据链路成功与否,右键/Esc 永远可以退出遮罩
+  const cancel = (): void => {
+    log('overlay', '取消选区(右键/Esc)')
+    void invoke('cancel_capture').catch(() => {})
+  }
+  window.addEventListener('contextmenu', event => {
+    event.preventDefault()
+    cancel()
+  })
+  window.addEventListener('keydown', event => {
+    if (event.key === 'Escape') cancel()
+  })
+
   // 截屏在 Rust 侧与遮罩窗创建并行进行:轮询取原始 RGBA(二进制 IPC)直到就绪(最多 3s)
   let buf: ArrayBuffer | null = null
   const fetchT0 = performance.now()
@@ -49,14 +62,16 @@ async function boot(): Promise<void> {
   const root = document.createElement('div')
   root.className = 'overlay'
   if (!buf) {
-    log('overlay', '无截屏数据,降级为提示文案')
-    root.classList.add('visible')
-    root.textContent = '未获取到屏幕图像(请在应用内发起屏幕选区)'
-    document.body.append(root)
+    // 取图失败:遮罩已不可用,关闭遮罩并恢复主窗(绝不让用户困在黑屏里)
+    log('overlay', '无截屏数据(超时/失败),取消本次选区')
+    cancel()
     return
   }
 
   // 载荷:宽度 u32 LE + 高度 u32 LE + RGBA 像素;零解码,putImageData 直上屏
+  if (!(buf instanceof ArrayBuffer)) {
+    log('overlay', `get_capture_raw 返回非 ArrayBuffer:${Object.prototype.toString.call(buf)}`)
+  }
   const dv = new DataView(buf)
   const width = dv.getUint32(0, true)
   const height = dv.getUint32(4, true)
@@ -166,18 +181,6 @@ async function boot(): Promise<void> {
     const rect = selection.end()
     redraw()
     if (rect) void finish(rect)
-  })
-  // 右键取消选区与识别
-  window.addEventListener('contextmenu', event => {
-    event.preventDefault()
-    log('overlay', '右键取消选区')
-    void invoke('cancel_capture').catch(() => {})
-  })
-  window.addEventListener('keydown', event => {
-    if (event.key === 'Escape') {
-      log('overlay', 'Esc 取消选区')
-      void invoke('cancel_capture').catch(() => {})
-    }
   })
   window.addEventListener('resize', resize)
 

@@ -1,6 +1,6 @@
 [package]
 name = "offlineqr"
-version = "1.2.2"
+version = "1.2.3"
 description = "完全离线的二维码识别小工具"
 edition = "2021"
 

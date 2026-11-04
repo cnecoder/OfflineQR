@@ -80,6 +80,7 @@
 | 33 | `perf: raw rgba binary ipc` | 取图链路去 PNG 化:截屏保留原始 RGBA → 二进制 IPC(tauri::ipc::Response)直传遮罩窗 → putImageData 直上屏。免 PNG 编码/解码与 base64/JSON(便携版实测占弹出延迟 ~0.8s);2K 屏与 1080p 的差距缩小到传输体积差 | ✔ 已完成(待实测计时) |
 | 36 | `fix: hotkey canonical form + badge listening reset` | 人工反馈"快捷键可以录制但一直闪烁且不生效":① with_handler 收到的事件字符串为插件 Shortcut::to_string() 规范形式(如 alt+KeyQ),状态存的却是前端传入的 alt+q,永不匹配 → 快捷键全部失效;HotkeyState 改存规范形式(启动默认值同理),canonical_hotkey 统一校验/规范化,Rust 单测固化"存储形式 == 事件字符串"回归;② 徽章 listening 呼吸态改由 hkRecording 派生(renderHotkeyBadges 唯一渲染出口),录制结束/取消必回默认文本并移除动画类(曾只改文本不移除类,呼吸动画永不停);③ 新增 suspend_hotkeys:录制期间挂起全局热键,重录相同组合键(如重录 Alt+Q)不再被系统热键竞争触发,成功/失败/Esc/失焦均恢复注册 | ✔ 已完成(Rust 4 单测 + 62 前端单测 + 11 E2E 全绿;待 exe 人工复测) |
 | 37 | `feat: header polish(help accent + theme swatch)` | 人工反馈三项界面微调:① 问号按钮改主题色实心圆(accent 底 + on-accent 字,悬停 accent-strong);② 顶栏"离线 · 本地运行"文案移除(与帮助浮层信息重复);③ 配色按钮去掉"绿/黄"文字,文字右侧改显示当前主题色块(.theme-swatch,取 var(--accent) 随主题自动变色,无需 JS 同步文本) | ✔ 已完成(62 单测 + 11 E2E 全绿;浏览器截图自测通过;待 exe 人工复测) |
+| 38 | `chore: release scanner-v1.2.3` | 按发布规范执行:版本 1.2.3(conf/package/Cargo 三处)、中英双版 Release Note(docs/release-notes/scanner-v1.2.3.*.md)、全量门禁后打 tag 触发 CI | ✔ 已完成 |
 
 每步完成后:勾选下方对应任务 + 更新本表状态 + commit。
 
@@ -226,3 +227,4 @@
 - 2026-11-05 界面微调(人工反馈):问号按钮改主题色实心圆;移除"离线 · 本地运行"重复文案;配色按钮改"配色 + 主题色块"呈现(色块随主题自动变色)。
 - 2026-11-05 盲区补测:新增产品身份守卫单测(productName↔identifier 成对 + conf/package/Cargo 三处版本一致)——起因是生成线被 CSP 跨行同步串入识别线产品身份(已在生成线修复),双线固化防复发。
 - 2026-11-05 顶栏协调微调(人工反馈):问号按钮 22px→18px(字号 11px),主题色块 11px→10px 并去描边(避免"复选框"感),与配色药丸按钮主次统一。
+- 2026-11-05 发布 scanner-v1.2.3(快捷键就地修改及其修复、帮助浮层、顶栏协调),Release Note 中英双版存档 docs/release-notes/。

@@ -90,6 +90,31 @@
 - `main`:基线冻结点,作为两条线的共同祖先与合流参考
 - 约定:在任一分支工作时,以该分支上的 task.md 为准继续同步进度;commit 纪律与工作约定不变
 
+## 版本发布规范与流程(2026-11-03 起)
+
+**双产品线与 tag 规范**
+
+- 全功能线 `recognition-generation` → 产品 **OfflineQR**,tag `vX.Y.Z`
+- 仅识别线 `recognition` → 产品 **OfflineQRScanner**,tag `scanner-vX.Y.Z`
+- tag 全仓库唯一、发布后不可重推;tag 携带的版本必须与该提交 `src-tauri/tauri.conf.json` 的 version 一致(CI 守卫)
+- 两线版本序列各自独立、各自递增;Release 名称由 CI 按 tag 前缀自动生成
+
+**发布流程**
+
+1. 确认分支门禁绿:单测 + 构建(+ E2E)
+2. 更新 `src-tauri/tauri.conf.json` / `package.json` / `src-tauri/Cargo.toml` 的 version(三处一致)
+3. 撰写 `docs/release-notes/<tag>.zh.md` 与 `<tag>.en.md`(新增/修复/优化/升级说明)
+4. commit(`chore: release <tag>`)并推送分支
+5. 打 tag 并推送 → CI 自动构建:Windows(NSIS + 绿色版)/ Linux / macOS;发版前自动执行单测
+6. 构建完成后核对 Release 资产,并以中英双版更新 Release 正文:`gh release edit <tag> --notes-file <合并文件>`
+7. 线上问题回归:复盘"为什么测试没拦住"并记入架构文档 §8
+
+**纪律**
+
+- release 一律由 CI 打包,本地不产出发布产物
+- Linux/macOS 构建失败为已知遗留(不影响 Windows 资产),失败日志构件自助取用
+- 发布基于已实测通过的提交;禁止在未验证的提交上打 tag
+
 ## CI / CD(待远程仓库创建后验证)
 
 - `.github/workflows/ci.yml`:push / PR(main、recognition、recognition-generation)→ 单测 + 构建 + E2E(ubuntu,前端不需要 Rust)

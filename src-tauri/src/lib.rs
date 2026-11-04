@@ -9,7 +9,9 @@ use chrono::Local as LocalTime;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_global_shortcut::{Builder as GlobalShortcutBuilder, GlobalShortcutExt, ShortcutState};
+use tauri_plugin_global_shortcut::{
+    Builder as GlobalShortcutBuilder, GlobalShortcutExt, Shortcut, ShortcutState,
+};
 
 static LOG_FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
 
@@ -64,9 +66,45 @@ fn log_event(app: &AppHandle, scope: &str, message: &str) {
     write_line(app, &format!("[{ts}][{scope}] {message}"));
 }
 
-/// 当前已注册的全局快捷键(小写规范化),顺序:[选区, 显隐/主窗]
-#[derive(Default)]
+/// 全局快捷键默认值,顺序:[选区, 显隐/主窗]
+const HOTKEY_DEFAULTS: [&str; 2] = ["alt+q", "alt+w"];
+
+/// 当前已注册的全局快捷键,顺序:[选区, 显隐/主窗]。
+/// 存储的是插件 Shortcut::to_string() 的规范形式(如 "alt+KeyQ"):
+/// with_handler 收到的事件字符串正是该形式,存取必须同源——
+/// 曾直接存前端传入的 "alt+q",事件却是 "alt+KeyQ",所有快捷键永不匹配而失效。
 struct HotkeyState(Mutex<[String; 2]>);
+
+impl Default for HotkeyState {
+    fn default() -> Self {
+        let canonical = |k: &str| {
+            let sc: Shortcut = k.parse().expect("内置默认快捷键必须合法");
+            sc.to_string()
+        };
+        Self(Mutex::new([
+            canonical(HOTKEY_DEFAULTS[0]),
+            canonical(HOTKEY_DEFAULTS[1]),
+        ]))
+    }
+}
+
+/// 校验并规范化一个组合键:解析为插件 Shortcut,返回 (Shortcut, 规范字符串)。
+/// 前置校验只给出友好错误;键名合法性以 crate 解析为准(支持字母/数字/F 键/方向键等)。
+fn canonical_hotkey(input: &str) -> Result<(Shortcut, String), String> {
+    let k = input.trim().to_lowercase();
+    if k.is_empty() {
+        return Err("快捷键为空".into());
+    }
+    let parts: Vec<&str> = k.split('+').filter(|p| !p.is_empty()).collect();
+    if parts.len() < 2 {
+        return Err(format!("快捷键 {k} 需要至少一个修饰键(Ctrl/Alt)"));
+    }
+    if matches!(*parts.last().unwrap(), "ctrl" | "control" | "alt" | "shift" | "super" | "meta") {
+        return Err(format!("快捷键 {k} 缺少主键"));
+    }
+    let shortcut: Shortcut = k.parse().map_err(|e| format!("快捷键 {k} 无效:{e}"))?;
+    Ok((shortcut, shortcut.to_string()))
+}
 
 /// 用系统默认浏览器打开 GitHub(硬编码白名单,避免任意 URL 注入)
 #[tauri::command]
@@ -92,25 +130,14 @@ fn open_github(app: AppHandle, target: String) -> Result<(), String> {
 }
 
 /// 重新注册全局快捷键(前端持久化配置,启动/用户修改后调用)。
-/// 键格式:小写 "修饰+主键"(如 ctrl+alt+q);两键不可相同;任一注册失败自动回滚旧键。
+/// 两键不可相同;任一注册失败自动回滚旧键。存入状态的是规范形式,
+/// 与 with_handler 收到的事件字符串同源(见 HotkeyState 注释)。
 #[tauri::command]
 fn register_hotkeys(app: AppHandle, region: String, toggle: String) -> Result<(), String> {
-    let normalize = |k: &str| k.trim().to_lowercase();
-    let (region, toggle) = (normalize(&region), normalize(&toggle));
-    if region.is_empty() || toggle.is_empty() || region == toggle {
-        return Err("快捷键为空或两键重复".into());
-    }
-    for k in [&region, &toggle] {
-        let parts: Vec<&str> = k.split('+').filter(|p| !p.is_empty()).collect();
-        if parts.len() < 2 {
-            return Err(format!("快捷键 {k} 需要至少一个修饰键(Ctrl/Alt)"));
-        }
-        let main = *parts.last().unwrap();
-        if matches!(main, "ctrl" | "alt" | "shift" | "super" | "meta")
-            || !main.chars().next().map(|c| c.is_ascii_alphanumeric() || c == 'f').unwrap_or(false)
-        {
-            return Err(format!("快捷键 {k} 主键无效"));
-        }
+    let (region_sc, region) = canonical_hotkey(&region)?;
+    let (toggle_sc, toggle) = canonical_hotkey(&toggle)?;
+    if region == toggle {
+        return Err("两个快捷键不能相同".into());
     }
     let gs = app.global_shortcut();
     let state = app.state::<HotkeyState>();
@@ -119,9 +146,9 @@ fn register_hotkeys(app: AppHandle, region: String, toggle: String) -> Result<()
         let _ = gs.unregister(k.as_str());
     }
     let mut failure: Option<String> = None;
-    for k in [&region, &toggle] {
-        if let Err(e) = gs.register(k.as_str()) {
-            failure = Some(format!("注册 {k} 失败:{e}(可能被其他程序占用)"));
+    for sc in [&region_sc, &toggle_sc] {
+        if let Err(e) = gs.register(*sc) {
+            failure = Some(format!("注册 {sc} 失败:{e}(可能被其他程序占用)"));
             break;
         }
     }
@@ -132,8 +159,23 @@ fn register_hotkeys(app: AppHandle, region: String, toggle: String) -> Result<()
         log_event(&app, "hotkey", &format!("快捷键修改失败并回滚:{msg}"));
         return Err(msg);
     }
-    *state.0.lock().unwrap() = [region.clone(), toggle.clone()];
-    log_event(&app, "hotkey", &format!("全局快捷键已更新:选区 {region},显隐 {toggle}"));
+    let canonical = [region, toggle];
+    log_event(&app, "hotkey", &format!("全局快捷键已更新:选区 {},显隐 {}", canonical[0], canonical[1]));
+    *state.0.lock().unwrap() = canonical;
+    Ok(())
+}
+
+/// 录制新快捷键期间临时挂起全局热键:按下的新组合键若与当前热键相同
+/// (如重录 Alt+Q),会同时被系统级热键捕获而直接触发选区/显隐,竞争不可控。
+/// 结束后前端调用 register_hotkeys(成功/失败都会)恢复注册。
+#[tauri::command]
+fn suspend_hotkeys(app: AppHandle) -> Result<(), String> {
+    let gs = app.global_shortcut();
+    let keys = app.state::<HotkeyState>().0.lock().unwrap().clone();
+    for k in &keys {
+        let _ = gs.unregister(k.as_str());
+    }
+    log_event(&app, "hotkey", "录制中:全局快捷键临时挂起");
     Ok(())
 }
 
@@ -583,7 +625,8 @@ pub fn run() {
                         .unwrap_or_else(|| "不可用".into())
                 ),
             );
-            // 全局快捷键:按状态默认值注册(选区/显隐),前端启动后会按用户配置重注册
+            // 全局快捷键:按状态默认值注册(状态内已存规范形式,与事件匹配);
+            // 前端启动后会按用户持久化配置重注册并覆盖
             let defaults = handle.state::<HotkeyState>().0.lock().unwrap().clone();
             let descs = ["屏幕选区识别", "显示/隐藏主窗"];
             for (combo, desc) in defaults.iter().zip(descs) {
@@ -601,6 +644,7 @@ pub fn run() {
             cancel_capture,
             append_log,
             register_hotkeys,
+            suspend_hotkeys,
             open_github,
             dump_failed_region,
             pick_image_files,
@@ -608,4 +652,46 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("OfflineQR 运行失败");
+}
+
+#[cfg(test)]
+mod hotkey_tests {
+    use super::*;
+
+    /// 存储的规范形式必须与 with_handler 收到的 shortcut.to_string() 完全一致,
+    /// 否则快捷键永不匹配(回归:存 "alt+q" 而事件为 "alt+KeyQ")
+    #[test]
+    fn canonical_form_matches_event_string() {
+        assert_eq!(canonical_hotkey("alt+q").unwrap().1, "alt+KeyQ");
+        assert_eq!(canonical_hotkey("ALT+Q").unwrap().1, "alt+KeyQ");
+        assert_eq!(canonical_hotkey("ctrl+alt+1").unwrap().1, "control+alt+Digit1");
+        assert_eq!(canonical_hotkey("shift+f5").unwrap().1, "shift+F5");
+        assert_eq!(canonical_hotkey("ctrl+shift+k").unwrap().1, "shift+control+KeyK");
+    }
+
+    #[test]
+    fn canonical_form_round_trips() {
+        for input in ["alt+q", "ctrl+shift+k", "alt+1", "shift+f5"] {
+            let (sc, canonical) = canonical_hotkey(input).unwrap();
+            let reparsed: Shortcut = canonical.parse().unwrap();
+            assert_eq!(reparsed, sc, "规范形式 {canonical} 应能无损还原 {input}");
+        }
+    }
+
+    #[test]
+    fn canonical_rejects_bad_input() {
+        assert!(canonical_hotkey("").is_err());
+        assert!(canonical_hotkey("   ").is_err());
+        assert!(canonical_hotkey("q").is_err(), "无修饰键");
+        assert!(canonical_hotkey("alt+ctrl").is_err(), "主键不能是修饰键");
+        assert!(canonical_hotkey("alt+非法键").is_err(), "未知主键");
+    }
+
+    #[test]
+    fn default_state_uses_canonical_form() {
+        let state = HotkeyState::default();
+        let keys = state.0.lock().unwrap().clone();
+        assert_eq!(keys[0], "alt+KeyQ");
+        assert_eq!(keys[1], "alt+KeyW");
+    }
 }

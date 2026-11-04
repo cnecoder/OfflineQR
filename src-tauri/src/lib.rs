@@ -9,7 +9,7 @@ use chrono::Local as LocalTime;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, Position, Size, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_global_shortcut::{Builder as GlobalShortcutBuilder, GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Builder as GlobalShortcutBuilder, GlobalShortcutExt, ShortcutState};
 
 static LOG_FILE: OnceLock<Option<PathBuf>> = OnceLock::new();
 
@@ -62,6 +62,79 @@ fn write_line(app: &AppHandle, line: &str) {
 fn log_event(app: &AppHandle, scope: &str, message: &str) {
     let ts = LocalTime::now().format("%Y-%m-%d %H:%M:%S%.3f");
     write_line(app, &format!("[{ts}][{scope}] {message}"));
+}
+
+/// 当前已注册的全局快捷键(小写规范化),顺序:[选区, 显隐/主窗]
+#[derive(Default)]
+struct HotkeyState(Mutex<[String; 2]>);
+
+/// 用系统默认浏览器打开 GitHub(硬编码白名单,避免任意 URL 注入)
+#[tauri::command]
+fn open_github(app: AppHandle, target: String) -> Result<(), String> {
+    let url = match target.as_str() {
+        "releases" => "https://github.com/cnecoder/OfflineQR/releases/latest",
+        "home" => "https://github.com/cnecoder/OfflineQR",
+        _ => return Err("未知链接".into()),
+    };
+    let ok = if cfg!(target_os = "windows") {
+        std::process::Command::new("cmd").args(["/C", "start", "", url]).spawn().is_ok()
+    } else if cfg!(target_os = "macos") {
+        std::process::Command::new("open").arg(url).spawn().is_ok()
+    } else {
+        std::process::Command::new("xdg-open").arg(url).spawn().is_ok()
+    };
+    if ok {
+        log_event(&app, "app", &format!("已在系统浏览器打开 {url}"));
+        Ok(())
+    } else {
+        Err("打开浏览器失败".into())
+    }
+}
+
+/// 重新注册全局快捷键(前端持久化配置,启动/用户修改后调用)。
+/// 键格式:小写 "修饰+主键"(如 ctrl+alt+q);两键不可相同;任一注册失败自动回滚旧键。
+#[tauri::command]
+fn register_hotkeys(app: AppHandle, region: String, toggle: String) -> Result<(), String> {
+    let normalize = |k: &str| k.trim().to_lowercase();
+    let (region, toggle) = (normalize(&region), normalize(&toggle));
+    if region.is_empty() || toggle.is_empty() || region == toggle {
+        return Err("快捷键为空或两键重复".into());
+    }
+    for k in [&region, &toggle] {
+        let parts: Vec<&str> = k.split('+').filter(|p| !p.is_empty()).collect();
+        if parts.len() < 2 {
+            return Err(format!("快捷键 {k} 需要至少一个修饰键(Ctrl/Alt)"));
+        }
+        let main = *parts.last().unwrap();
+        if matches!(main, "ctrl" | "alt" | "shift" | "super" | "meta")
+            || !main.chars().next().map(|c| c.is_ascii_alphanumeric() || c == 'f').unwrap_or(false)
+        {
+            return Err(format!("快捷键 {k} 主键无效"));
+        }
+    }
+    let gs = app.global_shortcut();
+    let state = app.state::<HotkeyState>();
+    let old = state.0.lock().unwrap().clone();
+    for k in &old {
+        let _ = gs.unregister(k.as_str());
+    }
+    let mut failure: Option<String> = None;
+    for k in [&region, &toggle] {
+        if let Err(e) = gs.register(k.as_str()) {
+            failure = Some(format!("注册 {k} 失败:{e}(可能被其他程序占用)"));
+            break;
+        }
+    }
+    if let Some(msg) = failure {
+        for k in &old {
+            let _ = gs.register(k.as_str());
+        }
+        log_event(&app, "hotkey", &format!("快捷键修改失败并回滚:{msg}"));
+        return Err(msg);
+    }
+    *state.0.lock().unwrap() = [region.clone(), toggle.clone()];
+    log_event(&app, "hotkey", &format!("全局快捷键已更新:选区 {region},显隐 {toggle}"));
+    Ok(())
 }
 
 /// 单个显示器的截屏(原始 RGBA)与物理几何(混合 DPI 下"逻辑值经创建时主屏缩放
@@ -438,6 +511,7 @@ async fn read_image_files(paths: Vec<String>) -> Result<Vec<ReadImageFile>, Stri
 pub fn run() {
     tauri::Builder::default()
         .manage(CaptureState::default())
+        .manage(HotkeyState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             GlobalShortcutBuilder::new()
@@ -445,17 +519,18 @@ pub fn run() {
                     if event.state != ShortcutState::Pressed {
                         return;
                     }
-                    let region = "alt+q".parse::<Shortcut>().unwrap();
-                    let toggle = "alt+w".parse::<Shortcut>().unwrap();
+                    // 与当前注册的快捷键(可被用户就地修改)匹配
+                    let keys = app.state::<HotkeyState>().0.lock().unwrap().clone();
+                    let pressed = shortcut.to_string();
                     let app = app.clone();
-                    if shortcut == &region {
+                    if pressed == keys[0] {
                         tauri::async_runtime::spawn(async move {
-                            log_event(&app, "hotkey", "全局快捷键 Alt+Q 触发屏幕选区");
+                            log_event(&app, "hotkey", "全局快捷键触发屏幕选区");
                             if let Err(e) = start_capture(app.clone()).await {
                                 log_event(&app, "hotkey", &format!("快捷键发起选区失败:{e}"));
                             }
                         });
-                    } else if shortcut == &toggle {
+                    } else if pressed == keys[1] {
                         toggle_main_window(&app);
                     }
                 })
@@ -486,10 +561,16 @@ pub fn run() {
                 })
                 .unwrap_or_else(|| "?".into());
             if let Some(window) = app.get_webview_window("main") {
-                let _ = window.set_title(&format!(
-                    "极简二维码 v{} [构建 {build_label} · exe {exe_meta}]",
-                    app.package_info().version
-                ));
+                // release 只显示名称+版本;debug 附带构建标记(排障用),标记始终写入日志
+                let title = if cfg!(debug_assertions) {
+                    format!(
+                        "极简二维码 v{} [构建 {build_label} · exe {exe_meta}]",
+                        app.package_info().version
+                    )
+                } else {
+                    format!("极简二维码 v{}", app.package_info().version)
+                };
+                let _ = window.set_title(&title);
             }
             log_event(
                 &handle,
@@ -502,9 +583,11 @@ pub fn run() {
                         .unwrap_or_else(|| "不可用".into())
                 ),
             );
-            // 全局快捷键:Alt+Q 屏幕选区识别,Alt+W 显示/隐藏主窗(冲突时降级为仅应用内可用)
-            for (combo, desc) in [("alt+q", "屏幕选区识别"), ("alt+w", "显示/隐藏主窗")] {
-                match handle.global_shortcut().register(combo) {
+            // 全局快捷键:按状态默认值注册(选区/显隐),前端启动后会按用户配置重注册
+            let defaults = handle.state::<HotkeyState>().0.lock().unwrap().clone();
+            let descs = ["屏幕选区识别", "显示/隐藏主窗"];
+            for (combo, desc) in defaults.iter().zip(descs) {
+                match handle.global_shortcut().register(combo.as_str()) {
                     Ok(_) => log_event(&handle, "hotkey", &format!("已注册全局快捷键 {combo}({desc})")),
                     Err(e) => log_event(&handle, "hotkey", &format!("注册全局快捷键 {combo}({desc})失败,可能被其他程序占用:{e}")),
                 }
@@ -517,6 +600,8 @@ pub fn run() {
             finish_capture,
             cancel_capture,
             append_log,
+            register_hotkeys,
+            open_github,
             dump_failed_region,
             pick_image_files,
             read_image_files

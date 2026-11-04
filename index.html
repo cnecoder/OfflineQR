@@ -33,7 +33,14 @@
         <h1>极简二维码</h1>
         <div class="header-right">
           <button id="theme-toggle" class="theme-toggle" type="button" title="切换配色(黑绿 / 黑黄)">配色 绿</button>
+          <button id="help-btn" class="help-btn" type="button" aria-label="帮助与下载" title="帮助与下载">?</button>
           <span class="subtitle">离线 · 本地运行</span>
+          <div id="help-pop" class="help-pop" hidden>
+            <div class="help-title">OfflineQR <span id="help-ver"></span></div>
+            <p class="help-line">完全离线 · 不上传任何数据</p>
+            <a class="help-link" data-gh="releases" href="https://github.com/cnecoder/OfflineQR/releases/latest" target="_blank" rel="noopener">获取最新版本 ↗</a>
+            <a class="help-link" data-gh="home" href="https://github.com/cnecoder/OfflineQR" target="_blank" rel="noopener">项目主页 ↗</a>
+          </div>
         </div>
       </header>
 
@@ -48,7 +55,9 @@
           <section id="dropzone" class="toolbar" data-testid="dropzone">
             <button id="pick-button" class="primary" data-testid="pick-button">选择图片</button>
             <button id="region-button" class="primary" data-testid="region-button" hidden>屏幕选区</button>
-            <span class="toolbar-hint">拖拽 / Ctrl+V 粘贴 / 全局 Alt+Q 屏幕选区</span>
+            <span class="toolbar-hint">拖拽 / Ctrl+V 粘贴</span>
+            <button id="hk-region" class="hotkey-badge" type="button" title="点击修改屏幕选区快捷键">选区 Alt+Q</button>
+            <button id="hk-toggle" class="hotkey-badge" type="button" title="点击修改显隐快捷键">显隐 Alt+W</button>
             <input id="file-input" type="file" accept="image/*" multiple hidden />
           </section>
           <button id="clear-button" class="clear-button" data-testid="clear-button" hidden>清空</button>

@@ -11,6 +11,8 @@ import { getTheme, setTheme } from './shared/theme'
 
 log('app', `主窗启动(桌面:${'__TAURI_INTERNALS__' in window ? '是' : '否'})`)
 
+const isTauri = '__TAURI_INTERNALS__' in window
+
 const appRoot = document.getElementById('app') as HTMLElement
 const pickButton = document.getElementById('pick-button') as HTMLButtonElement
 const regionButton = document.getElementById('region-button') as HTMLButtonElement
@@ -36,6 +38,147 @@ themeToggle.addEventListener('click', () => {
   syncThemeButton()
 })
 syncThemeButton()
+
+// ---- 全局快捷键:点击工具条徽章就地修改(按新组合键),localStorage 持久化 ----
+const HOTKEY_LS_KEY = 'qr.hotkeys.v1'
+type Hotkeys = { region: string; toggle: string }
+const HOTKEY_DEFAULT: Hotkeys = { region: 'alt+q', toggle: 'alt+w' }
+const hkRegion = document.getElementById('hk-region') as HTMLButtonElement
+const hkToggle = document.getElementById('hk-toggle') as HTMLButtonElement
+
+function loadHotkeys(): Hotkeys {
+  try {
+    const raw = JSON.parse(localStorage.getItem(HOTKEY_LS_KEY) ?? 'null') as Partial<Hotkeys> | null
+    const region = typeof raw?.region === 'string' && raw.region ? raw.region : HOTKEY_DEFAULT.region
+    const toggle = typeof raw?.toggle === 'string' && raw.toggle ? raw.toggle : HOTKEY_DEFAULT.toggle
+    if (region !== toggle) return { region, toggle }
+  } catch { /* 存储不可用走默认 */ }
+  return { ...HOTKEY_DEFAULT }
+}
+
+function fmtHotkey(k: string): string {
+  return k
+    .split('+')
+    .map(p => p.charAt(0).toUpperCase() + p.slice(1))
+    .join('+')
+}
+
+function syncHotkeyBadges(hk: Hotkeys): void {
+  hkRegion.textContent = `选区 ${fmtHotkey(hk.region)}`
+  hkToggle.textContent = `显隐 ${fmtHotkey(hk.toggle)}`
+}
+
+async function applyHotkeys(hk: Hotkeys): Promise<string | null> {
+  if (!isTauri) return null // 浏览器形态:热键不生效,仅展示/持久化
+  try {
+    await invoke('register_hotkeys', { region: hk.region, toggle: hk.toggle })
+    return null
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    log('hotkey', `快捷键注册失败:${msg}`)
+    return msg
+  }
+}
+
+let hkRecording: 'region' | 'toggle' | null = null
+function disarmHotkeyRecording(): void {
+  hkRecording = null
+  syncHotkeyBadges(loadHotkeys())
+}
+
+hkRegion.addEventListener('click', () => {
+  hkRecording = 'region'
+  hkRegion.textContent = '按下新组合键…'
+  hkRegion.classList.add('listening')
+})
+hkToggle.addEventListener('click', () => {
+  hkRecording = 'toggle'
+  hkToggle.textContent = '按下新组合键…'
+  hkToggle.classList.add('listening')
+})
+
+// 录制:捕获下一次组合键(需含 Ctrl/Alt;Esc 取消;纯修饰键等待主键)
+document.addEventListener(
+  'keydown',
+  event => {
+    if (!hkRecording) return
+    event.preventDefault()
+    event.stopPropagation()
+    if (event.key === 'Escape') {
+      disarmHotkeyRecording()
+      return
+    }
+    if (['Control', 'Alt', 'Shift', 'Meta'].includes(event.key)) return
+    const mods = [
+      event.ctrlKey && 'ctrl',
+      event.altKey && 'alt',
+      event.shiftKey && 'shift',
+      event.metaKey && 'meta',
+    ].filter(Boolean) as string[]
+    if (mods.length === 0) {
+      flashToast('快捷键需包含 Ctrl 或 Alt 修饰键')
+      return
+    }
+    const key = event.key.toLowerCase()
+    const combo = [...mods, key].join('+')
+    const kind = hkRecording
+    hkRecording = null
+    void (async () => {
+      const prev = loadHotkeys()
+      const hk: Hotkeys = { ...prev, [kind]: combo }
+      const err = await applyHotkeys(hk)
+      if (err) {
+        flashToast(`修改失败:${err}`)
+      } else {
+        try {
+          localStorage.setItem(HOTKEY_LS_KEY, JSON.stringify(hk))
+        } catch { /* 存储不可用,仅本次会话生效 */ }
+        flashToast('快捷键已更新')
+      }
+      syncHotkeyBadges(loadHotkeys())
+    })()
+  },
+  true,
+)
+
+// 启动:按持久化配置注册热键
+syncHotkeyBadges(loadHotkeys())
+void (async () => {
+  const err = await applyHotkeys(loadHotkeys())
+  if (err) log('hotkey', `启动注册快捷键失败:${err}`)
+})()
+
+// ---- 帮助浮层:版本 + GitHub 最新版/项目主页 ----
+const helpBtn = document.getElementById('help-btn') as HTMLButtonElement
+const helpPop = document.getElementById('help-pop') as HTMLElement
+const helpVer = document.getElementById('help-ver') as HTMLElement
+helpBtn.addEventListener('click', () => {
+  helpPop.hidden = !helpPop.hidden
+  if (!helpPop.hidden && isTauri) {
+    void import('@tauri-apps/api/app')
+      .then(m => m.getVersion())
+      .then(v => {
+        helpVer.textContent = `v${v}`
+      })
+      .catch(() => helpVer.textContent = '')
+  }
+})
+// 点击浮层/按钮之外关闭
+document.addEventListener('pointerdown', event => {
+  if (helpPop.hidden) return
+  const node = event.target as Node | null
+  if (node instanceof Element && (helpPop.contains(node) || helpBtn.contains(node))) return
+  helpPop.hidden = true
+})
+// 桌面:经 Rust 用系统浏览器打开(硬编码白名单,免注入)
+helpPop.addEventListener('click', event => {
+  const a = (event.target as Element).closest('a[data-gh]')
+  if (!a || !isTauri) return
+  event.preventDefault()
+  void invoke('open_github', { target: a.getAttribute('data-gh') }).catch(err =>
+    log('help', `打开链接失败:${String(err)}`),
+  )
+})
 
 const items: ResultItem[] = []
 let uidCounter = 0
@@ -246,7 +389,6 @@ function enqueueFiles(files: ArrayLike<File>, source: string, filePaths?: string
 }
 
 // 输入路径 1:文件选择(浏览器:HTML input;桌面:原生对话框——WebView2 不向网页暴露文件路径)
-const isTauri = '__TAURI_INTERNALS__' in window
 if (isTauri) {
   pickButton.addEventListener('click', () => {
     void invoke<string[]>('pick_image_files')

@@ -28,16 +28,12 @@ const ingest = createIngest()
 const queue = createSerialQueue()
 const progress = createProgress(progressEl)
 
-// 配色主题:黑绿/黑黄切换,持久化到 localStorage(首帧前由 index.html 内联脚本应用)
+// 配色主题:黑绿/黑黄切换,持久化到 localStorage(首帧前由 index.html 内联脚本应用);
+// 按钮只保留"配色"文字,当前主题由右侧色块呈现,色块用 var(--accent) 随主题自动变色
 const themeToggle = document.getElementById('theme-toggle') as HTMLButtonElement
-function syncThemeButton(): void {
-  themeToggle.textContent = getTheme() === 'black-yellow' ? '配色 黄' : '配色 绿'
-}
 themeToggle.addEventListener('click', () => {
   setTheme(getTheme() === 'black-yellow' ? 'black-green' : 'black-yellow')
-  syncThemeButton()
 })
-syncThemeButton()
 
 // ---- 全局快捷键:点击工具条徽章就地修改(按新组合键),localStorage 持久化 ----
 const HOTKEY_LS_KEY = 'qr.hotkeys.v1'

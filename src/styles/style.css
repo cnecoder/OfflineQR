@@ -96,22 +96,31 @@ body {
   border-radius: 999px;
   color: var(--muted);
 }
-.subtitle { color: var(--off); font-size: 12px; }
-/* 帮助问号与浮层(版本 + GitHub 链接) */
+/* 配色按钮的当前主题色块:随 var(--accent) 自动换色,无文字 */
+.theme-swatch {
+  display: inline-block;
+  width: 11px;
+  height: 11px;
+  border-radius: 3px;
+  background: var(--accent);
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  vertical-align: -1px;
+}
+/* 帮助问号与浮层(版本 + GitHub 链接):主题色实心圆,入口更醒目 */
 .help-btn {
   width: 22px;
   height: 22px;
   padding: 0;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--accent);
   border-radius: 50%;
-  background: transparent;
-  color: var(--muted);
+  background: var(--accent);
+  color: var(--on-accent);
   font: inherit;
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
 }
-.help-btn:hover { color: var(--accent); border-color: rgba(var(--accent-rgb), 0.6); }
+.help-btn:hover { background: var(--accent-strong); border-color: var(--accent-strong); color: var(--on-accent); }
 .header-right { position: relative; }
 .help-pop {
   position: absolute;

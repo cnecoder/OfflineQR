@@ -63,9 +63,19 @@ function fmtHotkey(k: string): string {
     .join('+')
 }
 
-function syncHotkeyBadges(hk: Hotkeys): void {
-  hkRegion.textContent = `选区 ${fmtHotkey(hk.region)}`
-  hkToggle.textContent = `显隐 ${fmtHotkey(hk.toggle)}`
+/** 徽章唯一渲染出口:文本与 listening 呼吸态都由 hkRecording 派生。
+ *  录制结束/取消必须回到这里——曾只改文本不移除 listening 类,呼吸动画永不停。 */
+function renderHotkeyBadges(hk: Hotkeys): void {
+  const base: Record<'region' | 'toggle', string> = {
+    region: `选区 ${fmtHotkey(hk.region)}`,
+    toggle: `显隐 ${fmtHotkey(hk.toggle)}`,
+  }
+  for (const kind of ['region', 'toggle'] as const) {
+    const el = kind === 'region' ? hkRegion : hkToggle
+    const recording = hkRecording === kind
+    el.classList.toggle('listening', recording)
+    el.textContent = recording ? '按下新组合键…' : base[kind]
+  }
 }
 
 async function applyHotkeys(hk: Hotkeys): Promise<string | null> {
@@ -83,19 +93,23 @@ async function applyHotkeys(hk: Hotkeys): Promise<string | null> {
 let hkRecording: 'region' | 'toggle' | null = null
 function disarmHotkeyRecording(): void {
   hkRecording = null
-  syncHotkeyBadges(loadHotkeys())
+  // 恢复录制开始时挂起的全局热键(Esc 取消 / 窗口失焦路径)
+  void applyHotkeys(loadHotkeys())
+  renderHotkeyBadges(loadHotkeys())
 }
 
-hkRegion.addEventListener('click', () => {
-  hkRecording = 'region'
-  hkRegion.textContent = '按下新组合键…'
-  hkRegion.classList.add('listening')
-})
-hkToggle.addEventListener('click', () => {
-  hkRecording = 'toggle'
-  hkToggle.textContent = '按下新组合键…'
-  hkToggle.classList.add('listening')
-})
+function startHotkeyRecording(kind: 'region' | 'toggle'): void {
+  hkRecording = kind
+  renderHotkeyBadges(loadHotkeys())
+  // 录制期间挂起全局热键:按下的新组合键若与当前热键相同(如重录 Alt+Q),
+  // 会被系统级热键直接捕获而触发选区/显隐,与录制竞争
+  if (isTauri) {
+    void invoke('suspend_hotkeys').catch(err => log('hotkey', `挂起快捷键失败:${String(err)}`))
+  }
+}
+
+hkRegion.addEventListener('click', () => startHotkeyRecording('region'))
+hkToggle.addEventListener('click', () => startHotkeyRecording('toggle'))
 
 // 录制:捕获下一次组合键(需含 Ctrl/Alt;Esc 取消;纯修饰键等待主键)
 document.addEventListener(
@@ -119,7 +133,7 @@ document.addEventListener(
       flashToast('快捷键需包含 Ctrl 或 Alt 修饰键')
       return
     }
-    const key = event.key.toLowerCase()
+    const key = event.key === ' ' ? 'space' : event.key.toLowerCase()
     const combo = [...mods, key].join('+')
     const kind = hkRecording
     hkRecording = null
@@ -129,20 +143,26 @@ document.addEventListener(
       const err = await applyHotkeys(hk)
       if (err) {
         flashToast(`修改失败:${err}`)
+        void applyHotkeys(prev) // 注册失败也恢复旧键(录制开始时已挂起)
       } else {
         try {
           localStorage.setItem(HOTKEY_LS_KEY, JSON.stringify(hk))
         } catch { /* 存储不可用,仅本次会话生效 */ }
         flashToast('快捷键已更新')
       }
-      syncHotkeyBadges(loadHotkeys())
+      renderHotkeyBadges(loadHotkeys())
     })()
   },
   true,
 )
 
+// 录制中窗口失焦(切走):取消录制并恢复热键,避免热键一直处于挂起
+window.addEventListener('blur', () => {
+  if (hkRecording) disarmHotkeyRecording()
+})
+
 // 启动:按持久化配置注册热键
-syncHotkeyBadges(loadHotkeys())
+renderHotkeyBadges(loadHotkeys())
 void (async () => {
   const err = await applyHotkeys(loadHotkeys())
   if (err) log('hotkey', `启动注册快捷键失败:${err}`)

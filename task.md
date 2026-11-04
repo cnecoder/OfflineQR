@@ -78,6 +78,7 @@
 | 35 | `chore: release scanner-v1.2.2` | 按发布规范执行:版本 1.2.2(conf/package/Cargo)、中英双版 Release Note(docs/release-notes/scanner-v1.2.2.*.md)、全量门禁后打 tag 触发 CI | ✔ 已完成 |
 | 32 | `chore: release scanner-v1.2.1` | 版本发布规范与流程入文档(双产品线 tag 规范/流程/纪律);中英双版 Release Note(docs/release-notes/scanner-v1.2.1.*.md);版本升至 1.2.1(conf/package/Cargo 三处)并打 tag 触发 CI 发布 | ✔ 已完成 |
 | 33 | `perf: raw rgba binary ipc` | 取图链路去 PNG 化:截屏保留原始 RGBA → 二进制 IPC(tauri::ipc::Response)直传遮罩窗 → putImageData 直上屏。免 PNG 编码/解码与 base64/JSON(便携版实测占弹出延迟 ~0.8s);2K 屏与 1080p 的差距缩小到传输体积差 | ✔ 已完成(待实测计时) |
+| 36 | `fix: hotkey canonical form + badge listening reset` | 人工反馈"快捷键可以录制但一直闪烁且不生效":① with_handler 收到的事件字符串为插件 Shortcut::to_string() 规范形式(如 alt+KeyQ),状态存的却是前端传入的 alt+q,永不匹配 → 快捷键全部失效;HotkeyState 改存规范形式(启动默认值同理),canonical_hotkey 统一校验/规范化,Rust 单测固化"存储形式 == 事件字符串"回归;② 徽章 listening 呼吸态改由 hkRecording 派生(renderHotkeyBadges 唯一渲染出口),录制结束/取消必回默认文本并移除动画类(曾只改文本不移除类,呼吸动画永不停);③ 新增 suspend_hotkeys:录制期间挂起全局热键,重录相同组合键(如重录 Alt+Q)不再被系统热键竞争触发,成功/失败/Esc/失焦均恢复注册 | ✔ 已完成(Rust 4 单测 + 62 前端单测 + 11 E2E 全绿;待 exe 人工复测) |
 
 每步完成后:勾选下方对应任务 + 更新本表状态 + commit。
 
@@ -220,3 +221,4 @@
 - 2026-11-03 遮罩右键取消(人工反馈):右键 = 取消选区与识别(左键拖拽不受影响,键位校验防误触发);遮罩底部新增操作提示条。
 - 2026-11-03 **fix:原始像素 IPC 黑屏卡死**(内测发现):二进制 Response 的 fetch 传输被 CSP 拦截(connect-src 缺 ipc 通道)→ DataVIew 异常 → boot 中断 → 遮罩黑屏且取消处理器未挂载;修复:CSP 放行 `ipc: http://ipc.localhost` + 守卫单测;取消处理器先行注册;取图失败兜底改为 cancel_capture 恢复主窗。
 - 2026-11-03 版本发布规范与流程入文档(双产品线 tag 规范 / 七步流程 / 三条纪律);发布 scanner-v1.2.1(图标、混合 DPI 修复、弹出耗时优化、右键取消),Release Note 中英双版存档 docs/release-notes/。
+- 2026-11-05 **fix:快捷键录制后不生效 + 徽章一直闪烁**(人工反馈)——根因一:热键匹配两侧字符串不同源(Rust 事件为 "alt+KeyQ",状态存 "alt+q"),HotkeyState 改存插件规范形式并以单测固化;根因二:录制态 .listening 类没有任何移除路径,呼吸动画永不停;改由 hkRecording 派生统一渲染。附带修复:录制期间挂起全局热键,重录相同组合键不再被系统热键竞争触发。

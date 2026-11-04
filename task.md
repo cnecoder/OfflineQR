@@ -222,3 +222,4 @@
 - 2026-11-03 遮罩右键取消(人工反馈):右键 = 取消选区与识别(左键拖拽不受影响,键位校验防误触发);遮罩底部新增操作提示条。
 - 2026-11-05 **fix:快捷键录制后不生效 + 徽章一直闪烁**(人工反馈)——根因一:热键匹配两侧字符串不同源(Rust 事件为 "alt+KeyQ",状态存 "alt+q"),HotkeyState 改存插件规范形式并以单测固化;根因二:录制态 .listening 类没有任何移除路径,呼吸动画永不停;改由 hkRecording 派生统一渲染。附带修复:录制期间挂起全局热键,重录相同组合键不再被系统热键竞争触发。
 - 2026-11-05 界面微调(人工反馈):问号按钮改主题色实心圆;移除"离线 · 本地运行"重复文案;配色按钮改"配色 + 主题色块"呈现(色块随主题自动变色)。
+- 2026-11-05 **fix:生成线产品身份串线**(自查发现):CSP 修复跨行同步时把识别线的 productName/identifier/version 一并带入(130a601),生成线一度以 OfflineQRScanner/com.offlineqr.scanner 构建,与识别线产品名与数据目录冲突;恢复 OfflineQR/com.offlineqr.desktop/1.2.0(与 package/Cargo 对齐);新增身份守卫单测(productName↔identifier 成对 + conf/package/Cargo 三处版本一致)防复发。
